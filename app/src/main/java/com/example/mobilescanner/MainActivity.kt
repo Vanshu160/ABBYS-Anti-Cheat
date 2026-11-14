@@ -11,7 +11,11 @@ import android.os.Process
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,7 +27,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,25 +60,25 @@ fun ScannerApp() {
     var pinCode by remember { mutableStateOf("") }
     var scanProgress by remember { mutableFloatStateOf(0f) }
     var scanStatusText by remember { mutableStateOf("Initializing...") }
+    var scanResults by remember { mutableStateOf<List<ScanFinding>>(emptyList()) }
     val context = LocalContext.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = if (currentStep == ScanStep.COMPLETED) Arrangement.Top else Arrangement.Center
     ) {
         Text(
-            text = "MOBILE SS SCANNER",
+            text = "ABBYS ANTI-CHEAT",
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary
         )
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         when (currentStep) {
-            // STEP 1: ADMIN PIN ENTRY
             ScanStep.ENTER_PIN -> {
                 Text("Enter the 6-digit PIN provided by the admin:")
                 Spacer(modifier = Modifier.height(16.dp))
@@ -96,19 +102,13 @@ fun ScannerApp() {
                 }
             }
 
-            // STEP 2: PERMISSION HANDSHAKE
             ScanStep.GRANT_PERMISSIONS -> {
-                Text(
-                    "Required Permissions",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text("Required Permissions", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
                     onClick = {
-                        val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                        context.startActivity(intent)
+                        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -140,20 +140,23 @@ fun ScannerApp() {
                 }
             }
 
-            // STEP 3: SCANNING PROGRESS
             ScanStep.SCANNING -> {
                 LaunchedEffect(Unit) {
-                    val stages = listOf(
-                        0.25f to "Checking installed packages...",
-                        0.50f to "Inspecting recent app usage...",
-                        0.75f to "Running C++ native integrity checks...",
-                        1.00f to "Uploading encrypted report..."
-                    )
-                    for ((progress, status) in stages) {
-                        scanProgress = progress
-                        scanStatusText = status
-                        delay(1200)
+                    scanStatusText = "Scanning packages & overlays..."
+                    scanProgress = 0.35f
+                    delay(600)
+
+                    scanStatusText = "Checking recent apps & storage..."
+                    scanProgress = 0.70f
+                    val results = withContext(Dispatchers.IO) {
+                        CheatScanner.runFullScan(context)
                     }
+
+                    scanStatusText = "Finalizing report..."
+                    scanProgress = 1.0f
+                    delay(400)
+
+                    scanResults = results
                     currentStep = ScanStep.COMPLETED
                 }
 
@@ -165,22 +168,59 @@ fun ScannerApp() {
                 )
             }
 
-            // STEP 4: DONE
             ScanStep.COMPLETED -> {
                 Text(
-                    "Scan Complete!",
-                    fontSize = 22.sp,
+                    "Scan Complete (PIN: $pinCode)",
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF4CAF50)
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("PIN: $pinCode — Report sent to admin dashboard.")
-                Spacer(modifier = Modifier.height(24.dp))
-                OutlinedButton(onClick = {
-                    pinCode = ""
-                    currentStep = ScanStep.ENTER_PIN
-                }) {
-                    Text("Done")
+
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(scanResults) { item ->
+                        val badgeColor = when (item.severity) {
+                            "HIGH" -> Color(0xFFD32F2F)
+                            "WARN" -> Color(0xFFF57C00)
+                            "CLEAN" -> Color(0xFF388E3C)
+                            else -> Color(0xFF1976D2)
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = "[${item.severity}] ${item.title}",
+                                color = badgeColor,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = item.detail,
+                                color = Color.LightGray,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = {
+                        pinCode = ""
+                        currentStep = ScanStep.ENTER_PIN
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("New Scan")
                 }
             }
         }
