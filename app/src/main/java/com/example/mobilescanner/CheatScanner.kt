@@ -7,13 +7,12 @@ import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 data class ScanFinding(
-    val severity: String, // "HIGH", "WARN", "INFO"
+    val severity: String,
     val title: String,
     val detail: String
 )
@@ -29,17 +28,13 @@ object CheatScanner {
     fun runFullScan(context: Context): List<ScanFinding> {
         val findings = mutableListOf<ScanFinding>()
 
+        findings.addAll(NativeBridge.getNativeFindings())
         findings.addAll(checkInstalledPackages(context))
         findings.addAll(checkOverlaysAndAccessibility(context))
         findings.addAll(checkRecentUsage(context))
         findings.addAll(checkDownloadsFolder())
         findings.addAll(checkDeveloperSettings(context))
 
-        if (findings.isEmpty()) {
-            findings.add(
-                ScanFinding("CLEAN", "No Suspicious Activity Found", "Device passed all Kotlin checks.")
-            )
-        }
         return findings
     }
 
@@ -52,14 +47,12 @@ object CheatScanner {
             val pkgName = pkg.packageName.lowercase()
             val appLabel = pkg.applicationInfo?.loadLabel(pm)?.toString() ?: pkgName
 
-            // 1. Check against known cheat/cloner keywords
             if (SUSPICIOUS_KEYWORDS.any { pkgName.contains(it) || appLabel.lowercase().contains(it) }) {
                 results.add(
                     ScanFinding("HIGH", "Suspicious App Installed", "$appLabel ($pkgName)")
                 )
             }
 
-            // 2. Check if non-system app was sideloaded outside Play Store
             val isSystem = (pkg.applicationInfo?.flags ?: 0) and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0
             if (!isSystem && pkgName != context.packageName) {
                 val installer = try {
@@ -85,8 +78,6 @@ object CheatScanner {
 
     private fun checkOverlaysAndAccessibility(context: Context): List<ScanFinding> {
         val results = mutableListOf<ScanFinding>()
-
-        // Check active Accessibility Services (used by auto-clickers & mod menus)
         val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
         val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
         for (service in enabledServices) {
@@ -107,7 +98,7 @@ object CheatScanner {
 
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val endTime = System.currentTimeMillis()
-        val startTime = endTime - (15 * 60 * 1000) // Last 15 minutes
+        val startTime = endTime - (15 * 60 * 1000)
 
         val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
         val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
