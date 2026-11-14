@@ -22,27 +22,8 @@ jobs:
 
       - name: Generate Clean AndroidManifest
         run: |
-          cat << 'EOF' > app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://android.com">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-              <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
-              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-              <application
-                  android:label="ABBYS Anti-Cheat"
-                  android:theme="@android:style/Theme.Material.NoActionBar">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
+          P="http"
+          printf '<?xml version="1.0" encoding="utf-8"?>\n<manifest xmlns:android="%s://://android.com">\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />\n    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application android:label="ABBYS Anti-Cheat" android:theme="@android:style/Theme.Material.NoActionBar">\n        <activity android:name=".MainActivity" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.MAIN" />\n                <category android:name="android.intent.category.LAUNCHER" />\n            </intent-filter>\n        </activity>\n    </application>\n</manifest>\n' "$P" > app/src/main/AndroidManifest.xml
 
       - name: Build Debug APK
         run: gradle assembleDebug
