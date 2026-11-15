@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ABBYS Anti-Cheat | SS Dashboard</title>
+  <script src="https://jsdelivr.net"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #090d16; color: #e6edf3; font-family: system-ui, -apple-system, sans-serif; padding: 20px; max-width: 720px; margin: auto; }
+    header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1f2937; padding-bottom: 16px; margin-bottom: 24px; }
+    h2 { margin: 0; color: #38bdf8; letter-spacing: 1px; }
+    .badge { background: #1e293b; color: #94a3b8; padding: 4px 10px; border-radius: 99px; font-size: 12px; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    label { display: block; font-size: 13px; color: #9ca3af; margin-bottom: 6px; }
+    input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #374151; background: #090d16; color: #fff; font-size: 15px; margin-bottom: 14px; }
+    button { width: 100%; padding: 14px; background: #0284c7; color: white; border: none; border-radius: 8px; font-weight: 600; font-size: 15px; cursor: pointer; }
+    button:hover { background: #0369a1; }
+    .pin-box { font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8; text-align: center; padding: 18px; background: #090d16; border: 1px dashed #0284c7; border-radius: 10px; margin-top: 16px; }
+    .status { text-align: center; font-size: 14px; color: #94a3b8; margin-top: 12px; }
+    .finding { background: #090d16; border-left: 4px solid #38bdf8; padding: 12px; border-radius: 6px; margin-bottom: 10px; }
+    .finding.HIGH { border-left-color: #ef4444; }
+    .finding.WARN { border-left-color: #f59e0b; }
+    .finding.CLEAN { border-left-color: #10b981; }
+    .sev { font-weight: 700; font-size: 12px; text-transform: uppercase; }
+    .HIGH .sev { color: #ef4444; }
+    .WARN .sev { color: #f59e0b; }
+    .CLEAN .sev { color: #10b981; }
+    .INFO .sev { color: #38bdf8; }
+    .detail { font-size: 13px; color: #9ca3af; margin-top: 4px; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>🛡️ ABBYS ANTI-CHEAT</h2>
+    <span class="badge">Mobile SS Panel</span>
+  </header>
+
+  <div class="card">
+    <label for="adminName">Admin Name or ID (optional):</label>
+    <input type="text" id="adminName" placeholder="e.g. Admin_Vanshu" />
+    <button onclick="generatePin()">Generate 6-Digit SS PIN</button>
+
+    <div id="pinDisplay" class="pin-box" style="display:none;"></div>
+    <p id="statusText" class="status"></p>
+  </div>
+
+  <div id="reportContainer" class="card" style="display:none;">
+    <h3 style="margin-top:0;">📋 Scan Results (<span id="reportPin"></span>)</h3>
+    <div id="reportList"></div>
+  </div>
+
+  <script>
+    const SUPABASE_URL = https://supabase.com/dashboard/project/zdssehbbxcvqiudkjtiz/settings/api-keys
+    const SUPABASE_KEY = sb_publishable_wHC0L9d7noV09xqYMPZRkw_VyrPjC8O;
+    const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    async function generatePin() {
+      const adminName = document.getElementById("adminName").value.trim() || "Admin";
+      const pin = Math.floor(100000 + Math.random() * 900000).toString();
+
+      document.getElementById("statusText").innerText = "Generating PIN...";
+      const { error } = await db
+        .from("scan_sessions")
+        .insert([{ pin: pin, admin_discord_id: adminName }]);
+
+      if (error) {
+        document.getElementById("statusText").innerText = "Error: " + error.message;
+        return;
+      }
+
+      document.getElementById("pinDisplay").style.display = "block";
+      document.getElementById("pinDisplay").innerText = pin;
+      document.getElementById("statusText").innerText = "Waiting for player to enter PIN in APK...";
+      document.getElementById("reportContainer").style.display = "none";
+      watchSession(pin);
+    }
+
+    function watchSession(pin) {
+      const timer = setInterval(async () => {
+        const { data } = await db
+          .from("scan_sessions")
+          .select("*")
+          .eq("pin", pin)
+          .single();
+
+        if (data && data.status === "COMPLETED" && data.report) {
+          clearInterval(timer);
+          document.getElementById("statusText").innerText = "✅ Scan Completed!";
+          document.getElementById("reportPin").innerText = "PIN: " + pin;
+          const container = document.getElementById("reportContainer");
+          const list = document.getElementById("reportList");
+          container.style.display = "block";
+
+          list.innerHTML = data.report.map(item => `
+            <div class="finding ${item.severity}">
+              <div class="sev">[${item.severity}] ${item.title}</div>
+              <div class="detail">${item.detail}</div>
+            </div>
+          `).join("");
+        }
+      }, 3000);
+    }
+  </script>
+</body>
+</html>
