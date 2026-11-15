@@ -31,8 +31,15 @@
   </header>
 
   <div class="card">
+    <label for="projectId">Supabase Project ID (e.g. zdssel...):</label>
+    <input type="text" id="projectId" placeholder="Paste short Project ID here" />
+
+    <label for="apiKey">Supabase Publishable Key (sb_publishable_...):</label>
+    <input type="text" id="apiKey" placeholder="Paste sb_publishable_... key here" />
+
     <label for="adminName">Admin Name or Discord ID:</label>
-    <input type="text" id="adminName" placeholder="e.g. Vanshu" />
+    <input type="text" id="adminName" placeholder="e.g. Vanshu.0" />
+
     <button id="genBtn" type="button">Generate 6-Digit SS PIN</button>
 
     <div id="pinDisplay" class="pin-box" style="display:none;"></div>
@@ -45,26 +52,42 @@
   </div>
 
   <script>
-    const PROJECT_ID = "https://supabase.com/dashboard/project/zdssehbbxcvqiudkjtiz/settings/api-keys;
-    const API_KEY = sb_publishable_wHC0L9d7noV09xqYMPZRkw_VyrPjC8O;
+    const projInput = document.getElementById("projectId");
+    const keyInput = document.getElementById("apiKey");
+    const adminInput = document.getElementById("adminName");
+    const statusEl = document.getElementById("statusText");
+    const pinEl = document.getElementById("pinDisplay");
 
-    const HOST = [PROJECT_ID, "supabase", "co"].join(".");
-    const BASE_URL = window.location.protocol + "//" + HOST + "/rest/v1/scan_sessions";
+    projInput.value = localStorage.getItem("abbys_proj") || "";
+    keyInput.value = localStorage.getItem("abbys_key") || "";
+    adminInput.value = localStorage.getItem("abbys_admin") || "";
 
     document.getElementById("genBtn").addEventListener("click", async function() {
-      const statusEl = document.getElementById("statusText");
-      const pinEl = document.getElementById("pinDisplay");
-      const adminName = document.getElementById("adminName").value.trim() || "Admin";
+      const projectId = projInput.value.trim();
+      const apiKey = keyInput.value.trim();
+      const adminName = adminInput.value.trim() || "Admin";
+
+      if (!projectId || !apiKey) {
+        statusEl.innerText = "Please paste both your Project ID and Publishable Key above!";
+        return;
+      }
+
+      localStorage.setItem("abbys_proj", projectId);
+      localStorage.setItem("abbys_key", apiKey);
+      localStorage.setItem("abbys_admin", adminName);
+
+      const host = [projectId, "supabase", "co"].join(".");
+      const baseUrl = window.location.protocol + "//" + host + "/rest/v1/scan_sessions";
       const pin = Math.floor(100000 + Math.random() * 900000).toString();
 
-      statusEl.innerText = "Connecting to " + HOST + "...";
+      statusEl.innerText = "Connecting to " + host + "...";
 
       try {
-        const res = await fetch(BASE_URL, {
+        const res = await fetch(baseUrl, {
           method: "POST",
           headers: {
-            "apikey": API_KEY,
-            "Authorization": "Bearer " + API_KEY,
+            "apikey": apiKey,
+            "Authorization": "Bearer " + apiKey,
             "Content-Type": "application/json",
             "Prefer": "return=minimal"
           },
@@ -73,7 +96,7 @@
 
         if (!res.ok) {
           const errText = await res.text();
-          statusEl.innerText = "Supabase Error (" + res.status + "): " + errText;
+          statusEl.innerText = "Database Error (" + res.status + "): " + errText;
           return;
         }
 
@@ -81,19 +104,19 @@
         pinEl.innerText = pin;
         statusEl.innerText = "Waiting for player to enter PIN in APK...";
         document.getElementById("reportContainer").style.display = "none";
-        watchSession(pin);
+        watchSession(baseUrl, apiKey, pin);
       } catch (err) {
         statusEl.innerText = "Network Error: " + err.message;
       }
     });
 
-    function watchSession(pin) {
+    function watchSession(baseUrl, apiKey, pin) {
       const timer = setInterval(async () => {
         try {
-          const res = await fetch(BASE_URL + "?pin=eq." + pin + "&select=*", {
+          const res = await fetch(baseUrl + "?pin=eq." + pin + "&select=*", {
             headers: {
-              "apikey": API_KEY,
-              "Authorization": "Bearer " + API_KEY
+              "apikey": apiKey,
+              "Authorization": "Bearer " + apiKey
             }
           });
           const rows = await res.json();
@@ -101,7 +124,7 @@
 
           if (data && data.status === "COMPLETED" && data.report) {
             clearInterval(timer);
-            document.getElementById("statusText").innerText = "✅ Scan Completed!";
+            statusEl.innerText = "✅ Scan Completed!";
             document.getElementById("reportPin").innerText = "PIN: " + pin;
             document.getElementById("reportContainer").style.display = "block";
             document.getElementById("reportList").innerHTML = data.report.map(item => `
