@@ -15,7 +15,7 @@
     input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #374151; background: #090d16; color: #fff; font-size: 15px; margin-bottom: 14px; }
     button { width: 100%; padding: 14px; background: #0284c7; color: white; border: none; border-radius: 8px; font-weight: 600; font-size: 15px; cursor: pointer; }
     .pin-box { font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8; text-align: center; padding: 18px; background: #090d16; border: 1px dashed #0284c7; border-radius: 10px; margin-top: 16px; }
-    .status { text-align: center; font-size: 14px; color: #f59e0b; margin-top: 12px; }
+    .status { text-align: center; font-size: 14px; color: #f59e0b; margin-top: 12px; word-break: break-word; }
     .finding { background: #090d16; border-left: 4px solid #38bdf8; padding: 12px; border-radius: 6px; margin-bottom: 10px; }
     .finding.HIGH { border-left-color: #ef4444; }
     .finding.WARN { border-left-color: #f59e0b; }
@@ -33,10 +33,10 @@
   <div class="card">
     <label for="adminName">Admin Name or Discord ID:</label>
     <input type="text" id="adminName" placeholder="e.g. Vanshu" />
-    <button id="genBtn" onclick="generatePin()">Generate 6-Digit SS PIN</button>
+    <button id="genBtn" type="button">Generate 6-Digit SS PIN</button>
 
     <div id="pinDisplay" class="pin-box" style="display:none;"></div>
-    <p id="statusText" class="status"></p>
+    <p id="statusText" class="status">Ready to generate PIN.</p>
   </div>
 
   <div id="reportContainer" class="card" style="display:none;">
@@ -45,20 +45,19 @@
   </div>
 
   <script>
-    // 1. Put ONLY your Supabase Project ID (the letters before .supabase.co, e.g. zdsselxxxx)
-    const PROJECT_ID ="://supabase.com.zdssel
-    // 2. Put your sb_publishable_... key
-    const API_KEY = "sb_publishable_wHC0L9d7noV09xqYMPZRkw_VyrPjC8O;
+    const PROJECT_ID = "https://supabase.com/dashboard/project/zdssehbbxcvqiudkjtiz/settings/api-keys;
+    const API_KEY = sb_publishable_wHC0L9d7noV09xqYMPZRkw_VyrPjC8O;
 
-    const BASE_URL = "https://" + PROJECT_ID + ".supabase.co/rest/v1/scan_sessions";
+    const HOST = [PROJECT_ID, "supabase", "co"].join(".");
+    const BASE_URL = window.location.protocol + "//" + HOST + "/rest/v1/scan_sessions";
 
-    async function generatePin() {
+    document.getElementById("genBtn").addEventListener("click", async function() {
       const statusEl = document.getElementById("statusText");
       const pinEl = document.getElementById("pinDisplay");
       const adminName = document.getElementById("adminName").value.trim() || "Admin";
       const pin = Math.floor(100000 + Math.random() * 900000).toString();
 
-      statusEl.innerText = "Connecting to database...";
+      statusEl.innerText = "Connecting to " + HOST + "...";
 
       try {
         const res = await fetch(BASE_URL, {
@@ -74,7 +73,7 @@
 
         if (!res.ok) {
           const errText = await res.text();
-          statusEl.innerText = "Database Error (" + res.status + "): " + errText;
+          statusEl.innerText = "Supabase Error (" + res.status + "): " + errText;
           return;
         }
 
@@ -86,7 +85,7 @@
       } catch (err) {
         statusEl.innerText = "Network Error: " + err.message;
       }
-    }
+    });
 
     function watchSession(pin) {
       const timer = setInterval(async () => {
@@ -98,7 +97,7 @@
             }
           });
           const rows = await res.json();
-          const data = rows && rows[0];
+          const data = Array.isArray(rows) ? rows : null;
 
           if (data && data.status === "COMPLETED" && data.report) {
             clearInterval(timer);
