@@ -3,6 +3,7 @@ package com.example.mobilescanner
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
@@ -17,12 +18,21 @@ data class ScanFinding(
     val detail: String
 )
 
+/**
+ * Severity policy: HIGH is reserved for strong, hard-to-explain signals (the native root/hook/debugger
+ * checks). A name match on an app or file is only WARN and says so. Things that are common and
+ * innocent (sideloaded apps, accessibility services, ADB) are INFO for the admin's context.
+ */
 object CheatScanner {
 
-    private val SUSPICIOUS_KEYWORDS = listOf(
-        "gameguardian", "luckypatcher", "cheat", "injector", "modmenu",
-        "parallel", "virtual", "xposed", "lsposed", "magisk", "kernelsu",
-        "autoclicker", "macro", "esp", "aimbot", "wallhack", "gg."
+    /** Distinctive enough to match inside the lowercase letters-only form of package + label. */
+    private val DISTINCTIVE = listOf("gameguardian", "luckypatcher", "lsposed", "kernelsu", "aimbot", "wallhack", "autoclicker")
+
+    /** Short words match only as whole words, never as substrings ("esp" must not hit "espn"). */
+    private val WHOLE_WORDS = setOf("xposed", "magisk", "injector", "modmenu")
+
+    private val TRUSTED_INSTALLERS = setOf(
+        "com.android.vending", "com.sec.android.app.samsungapps", "com.amazon.venezia", "org.fdroid.fdroid"
     )
 
     fun runFullScan(context: Context): List<ScanFinding> {
@@ -30,12 +40,19 @@ object CheatScanner {
 
         findings.addAll(NativeBridge.getNativeFindings())
         findings.addAll(checkInstalledPackages(context))
-        findings.addAll(checkOverlaysAndAccessibility(context))
+        findings.addAll(checkAccessibility(context))
         findings.addAll(checkRecentUsage(context))
         findings.addAll(checkDownloadsFolder())
         findings.addAll(checkDeveloperSettings(context))
 
         return findings
+    }
+
+    private fun matchesSuspiciousName(pkgName: String, label: String): Boolean {
+        val letters = (pkgName + label).lowercase().filter { it.isLetter() }
+        if (DISTINCTIVE.any { letters.contains(it) }) return true
+        val words = (pkgName + "." + label).lowercase().split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
+        return words.any { it in WHOLE_WORDS }
     }
 
     private fun checkInstalledPackages(context: Context): List<ScanFinding> {
@@ -47,13 +64,16 @@ object CheatScanner {
             val pkgName = pkg.packageName.lowercase()
             val appLabel = pkg.applicationInfo?.loadLabel(pm)?.toString() ?: pkgName
 
-            if (SUSPICIOUS_KEYWORDS.any { pkgName.contains(it) || appLabel.lowercase().contains(it) }) {
+            if (matchesSuspiciousName(pkgName, appLabel)) {
                 results.add(
-                    ScanFinding("HIGH", "Suspicious App Installed", "$appLabel ($pkgName)")
+                    ScanFinding(
+                        "WARN", "App name resembles a known cheat/root tool",
+                        "$appLabel ($pkgName). Name match only; verify the app before drawing conclusions."
+                    )
                 )
             }
 
-            val isSystem = (pkg.applicationInfo?.flags ?: 0) and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0
+            val isSystem = ((pkg.applicationInfo?.flags ?: 0) and ApplicationInfo.FLAG_SYSTEM) != 0
             if (!isSystem && pkgName != context.packageName) {
                 val installer = try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -66,9 +86,9 @@ object CheatScanner {
                     null
                 }
 
-                if (installer != "com.android.vending") {
+                if (installer !in TRUSTED_INSTALLERS) {
                     results.add(
-                        ScanFinding("WARN", "Sideloaded App Detected", "$appLabel (Source: ${installer ?: "Unknown APK"})")
+                        ScanFinding("INFO", "App not from a major store", "$appLabel (installer: ${installer ?: "none / APK file"})")
                     )
                 }
             }
@@ -76,14 +96,16 @@ object CheatScanner {
         return results
     }
 
-    private fun checkOverlaysAndAccessibility(context: Context): List<ScanFinding> {
+    private fun checkAccessibility(context: Context): List<ScanFinding> {
         val results = mutableListOf<ScanFinding>()
         val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
         val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
         for (service in enabledServices) {
-            val serviceId = service.id ?: "Unknown Service"
             results.add(
-                ScanFinding("WARN", "Active Accessibility Service", serviceId)
+                ScanFinding(
+                    "INFO", "Accessibility service enabled",
+                    "${service.id ?: "unknown"} (often assistive technology such as a screen reader; not suspicious by itself)"
+                )
             )
         }
         return results
@@ -92,7 +114,7 @@ object CheatScanner {
     private fun checkRecentUsage(context: Context): List<ScanFinding> {
         val results = mutableListOf<ScanFinding>()
         if (!hasUsageStatsPermission(context)) {
-            results.add(ScanFinding("WARN", "Usage Permission Missing", "Player skipped Usage Access permission."))
+            results.add(ScanFinding("INFO", "Recent-app check skipped", "Usage Access was not granted, so this part of the scan is incomplete."))
             return results
         }
 
@@ -110,9 +132,7 @@ object CheatScanner {
 
         for (app in recentApps) {
             val timeStr = formatter.format(Date(app.lastTimeUsed))
-            results.add(
-                ScanFinding("INFO", "Recent App ($timeStr)", app.packageName)
-            )
+            results.add(ScanFinding("INFO", "Recent App ($timeStr)", app.packageName))
         }
         return results
     }
@@ -120,19 +140,17 @@ object CheatScanner {
     private fun checkDownloadsFolder(): List<ScanFinding> {
         val results = mutableListOf<ScanFinding>()
         if (!hasAllFilesPermission()) {
-            results.add(ScanFinding("WARN", "Storage Permission Missing", "Player skipped All Files Access."))
+            results.add(ScanFinding("INFO", "Downloads check skipped", "All Files Access was not granted, so this part of the scan is incomplete."))
             return results
         }
 
         val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val riskyExtensions = listOf(".apk", ".so", ".lua", ".cfg", ".obb", ".zip")
+        val interestingExtensions = listOf(".apk", ".so", ".lua")
 
         downloadsDir?.listFiles()?.forEach { file ->
             val name = file.name.lowercase()
-            if (riskyExtensions.any { name.endsWith(it) }) {
-                results.add(
-                    ScanFinding("WARN", "Suspicious File in Downloads", file.name)
-                )
+            if (interestingExtensions.any { name.endsWith(it) }) {
+                results.add(ScanFinding("INFO", "File in Downloads", "${file.name} (file name only; contents not inspected)"))
             }
         }
         return results
@@ -142,9 +160,7 @@ object CheatScanner {
         val results = mutableListOf<ScanFinding>()
         val adbEnabled = Settings.Global.getInt(context.contentResolver, Settings.Global.ADB_ENABLED, 0)
         if (adbEnabled == 1) {
-            results.add(
-                ScanFinding("WARN", "USB Debugging (ADB) Enabled", "ADB is turned on in Developer Options.")
-            )
+            results.add(ScanFinding("INFO", "USB debugging (ADB) enabled", "Common on developer and hobbyist devices; not suspicious by itself."))
         }
         return results
     }

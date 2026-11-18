@@ -59,7 +59,7 @@
     const pinEl = document.getElementById("pinDisplay");
 
     projInput.value = localStorage.getItem("abbys_proj") || "";
-    keyInput.value = localStorage.getItem("abbys_key") || "";
+    keyInput.value = sessionStorage.getItem("abbys_key") || "";
     adminInput.value = localStorage.getItem("abbys_admin") || "";
 
     document.getElementById("genBtn").addEventListener("click", async function() {
@@ -73,12 +73,12 @@
       }
 
       localStorage.setItem("abbys_proj", projectId);
-      localStorage.setItem("abbys_key", apiKey);
+      sessionStorage.setItem("abbys_key", apiKey);
       localStorage.setItem("abbys_admin", adminName);
 
       const host = [projectId, "supabase", "co"].join(".");
-      const baseUrl = window.location.protocol + "//" + host + "/rest/v1/scan_sessions";
-      const pin = Math.floor(100000 + Math.random() * 900000).toString();
+      const baseUrl = "https://" + host + "/rest/v1/scan_sessions";
+      const pin = String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000));
 
       statusEl.innerText = "Connecting to " + host + "...";
 
@@ -120,19 +120,29 @@
             }
           });
           const rows = await res.json();
-          const data = Array.isArray(rows) ? rows : null;
+          const data = Array.isArray(rows) ? rows[0] : null;
 
           if (data && data.status === "COMPLETED" && data.report) {
             clearInterval(timer);
             statusEl.innerText = "✅ Scan Completed!";
             document.getElementById("reportPin").innerText = "PIN: " + pin;
             document.getElementById("reportContainer").style.display = "block";
-            document.getElementById("reportList").innerHTML = data.report.map(item => `
-              <div class="finding ${item.severity}">
-                <div class="sev">[${item.severity}] ${item.title}</div>
-                <div class="detail">${item.detail}</div>
-              </div>
-            `).join("");
+            const list = document.getElementById("reportList");
+            list.replaceChildren();
+            const allowed = ["HIGH", "WARN", "INFO", "CLEAN"];
+            for (const item of data.report) {
+              const sev = allowed.includes(item.severity) ? item.severity : "INFO";
+              const box = document.createElement("div");
+              box.className = "finding " + sev;
+              const t = document.createElement("div");
+              t.className = "sev";
+              t.textContent = "[" + sev + "] " + item.title;
+              const d = document.createElement("div");
+              d.className = "detail";
+              d.textContent = item.detail;
+              box.append(t, d);
+              list.appendChild(box);
+            }
           }
         } catch (e) {}
       }, 3000);

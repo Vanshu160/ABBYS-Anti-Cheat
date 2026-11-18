@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -62,6 +63,10 @@ fun ScannerApp() {
     var scanStatusText by remember { mutableStateOf("Initializing...") }
     var scanResults by remember { mutableStateOf<List<ScanFinding>>(emptyList()) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var verifying by remember { mutableStateOf(false) }
+    var pinError by remember { mutableStateOf<String?>(null) }
+    var uploadStatus by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -81,11 +86,20 @@ fun ScannerApp() {
         when (currentStep) {
             ScanStep.ENTER_PIN -> {
                 Text("Enter the 6-digit PIN provided by the admin:")
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "This scan reads: names of installed apps, enabled accessibility services, apps used in the " +
+                        "last 15 minutes, file names in Downloads, whether USB debugging is on, and basic " +
+                        "root/debugger indicators. It does not read file contents, messages, photos or game worlds. " +
+                        "The result is sent to the admin who gave you this PIN.",
+                    fontSize = 12.sp,
+                    color = Color.LightGray
+                )
                 Spacer(modifier = Modifier.height(16.dp))
 
                 OutlinedTextField(
                     value = pinCode,
-                    onValueChange = { if (it.length <= 6) pinCode = it },
+                    onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) pinCode = it },
                     label = { Text("Session PIN") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -93,12 +107,25 @@ fun ScannerApp() {
                 )
                 Spacer(modifier = Modifier.height(24.dp))
 
+                pinError?.let {
+                    Text(it, color = Color(0xFFD32F2F), fontSize = 13.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
                 Button(
-                    onClick = { currentStep = ScanStep.GRANT_PERMISSIONS },
-                    enabled = pinCode.length == 6,
+                    onClick = {
+                        verifying = true
+                        pinError = null
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) { ReportClient.verifyPin(pinCode) }
+                            verifying = false
+                            if (ok) currentStep = ScanStep.GRANT_PERMISSIONS
+                            else pinError = "PIN not accepted. It may be wrong, already used, expired, or the server is unreachable."
+                        }
+                    },
+                    enabled = pinCode.length == 6 && !verifying,
                     modifier = Modifier.fillMaxWidth().height(50.dp)
                 ) {
-                    Text("Verify PIN")
+                    Text(if (verifying) "Checking..." else "Verify PIN")
                 }
             }
 
@@ -157,6 +184,10 @@ fun ScannerApp() {
                     delay(400)
 
                     scanResults = results
+                    scanStatusText = "Sending report to admin..."
+                    val sent = withContext(Dispatchers.IO) { ReportClient.submit(pinCode, results) }
+                    uploadStatus = if (sent) "Report sent to the admin."
+                    else "Could not send the report. Show this screen to the admin."
                     currentStep = ScanStep.COMPLETED
                 }
 
@@ -175,6 +206,7 @@ fun ScannerApp() {
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF4CAF50)
                 )
+                Text(uploadStatus, fontSize = 12.sp, color = Color.LightGray)
                 Spacer(modifier = Modifier.height(12.dp))
 
                 LazyColumn(
@@ -216,6 +248,8 @@ fun ScannerApp() {
                 OutlinedButton(
                     onClick = {
                         pinCode = ""
+                        pinError = null
+                        uploadStatus = ""
                         currentStep = ScanStep.ENTER_PIN
                     },
                     modifier = Modifier.fillMaxWidth()

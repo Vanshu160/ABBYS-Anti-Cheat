@@ -15,7 +15,7 @@ object NativeBridge {
         }
 
         if (raw == "CLEAN" || raw.isBlank()) {
-            return listOf(ScanFinding("CLEAN", "C++ Kernel Integrity Passed", "No root mounts, Frida hooks, or debuggers found."))
+            return listOf(ScanFinding("CLEAN", "Basic native checks found nothing", "Checked common root files, mounts, hooks and debugger state. Android hides many of these paths from apps, so this is not proof of a clean device."))
         }
 
         return raw.split(";").mapNotNull { entry ->
