@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ABBYS Anti-Cheat | SS Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h2>ABBYS ANTI-CHEAT</h2>
+    <span class="badge">Self-Hosted SS Panel</span>
+  </header>
+
+  <div class="card">
+    <label for="adminKey">Admin key (kept only for this browser tab):</label>
+    <input type="password" id="adminKey" autocomplete="off" />
+
+    <label for="adminName">Admin name:</label>
+    <input type="text" id="adminName" placeholder="e.g. Vanshu" />
+
+    <button id="genBtn" type="button">Generate 6-digit SS PIN</button>
+    <div id="pinDisplay" class="pin-box hidden"></div>
+    <p id="statusText" class="status">Ready to generate PIN.</p>
+  </div>
+
+  <div id="reportContainer" class="card hidden">
+    <h3>Scan results (<span id="reportPin"></span>)</h3>
+    <p class="note">Findings are indicators for review, not proof. Name matches in particular can be wrong.</p>
+    <div id="reportList"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
