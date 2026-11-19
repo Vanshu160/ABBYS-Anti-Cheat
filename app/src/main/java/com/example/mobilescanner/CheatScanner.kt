@@ -4,8 +4,8 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import java.text.SimpleDateFormat
@@ -20,7 +20,7 @@ data class ScanFinding(
 
 /**
  * Severity policy: HIGH is reserved for strong, hard-to-explain signals (the native root/hook/debugger
- * checks). A name match on an app or file is only WARN and says so. Things that are common and
+ * checks, or a mod archive containing a known cheat client's code). A name match on an app or file is only WARN and says so. Things that are common and
  * innocent (sideloaded apps, accessibility services, ADB) are INFO for the admin's context.
  */
 object CheatScanner {
@@ -35,17 +35,27 @@ object CheatScanner {
         "com.android.vending", "com.sec.android.app.samsungapps", "com.amazon.venezia", "org.fdroid.fdroid"
     )
 
-    fun runFullScan(context: Context): List<ScanFinding> {
+    fun runFullScan(context: Context, safTree: Uri? = null): List<ScanFinding> {
         val findings = mutableListOf<ScanFinding>()
 
         findings.addAll(NativeBridge.getNativeFindings())
         findings.addAll(checkInstalledPackages(context))
         findings.addAll(checkAccessibility(context))
         findings.addAll(checkRecentUsage(context))
-        findings.addAll(checkDownloadsFolder())
+        findings.addAll(StorageScanner.scan(context))
+        findings.addAll(SafFolderScanner.scan(context, safTree))
         findings.addAll(checkDeveloperSettings(context))
 
-        return findings
+        return capFindings(findings)
+    }
+
+    /** The server rejects reports over 200 findings, so keep the most severe ones. */
+    private fun capFindings(all: List<ScanFinding>, max: Int = 190): List<ScanFinding> {
+        if (all.size <= max) return all
+        val order = listOf("HIGH", "WARN", "INFO", "CLEAN")
+        val sorted = all.sortedBy { val i = order.indexOf(it.severity); if (i < 0) 2 else i }
+        val kept = sorted.take(max - 1)
+        return kept + ScanFinding("INFO", "Report truncated", "${all.size - kept.size} lower-priority findings were omitted to fit the report limit.")
     }
 
     private fun matchesSuspiciousName(pkgName: String, label: String): Boolean {
@@ -133,25 +143,6 @@ object CheatScanner {
         for (app in recentApps) {
             val timeStr = formatter.format(Date(app.lastTimeUsed))
             results.add(ScanFinding("INFO", "Recent App ($timeStr)", app.packageName))
-        }
-        return results
-    }
-
-    private fun checkDownloadsFolder(): List<ScanFinding> {
-        val results = mutableListOf<ScanFinding>()
-        if (!hasAllFilesPermission()) {
-            results.add(ScanFinding("INFO", "Downloads check skipped", "All Files Access was not granted, so this part of the scan is incomplete."))
-            return results
-        }
-
-        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val interestingExtensions = listOf(".apk", ".so", ".lua")
-
-        downloadsDir?.listFiles()?.forEach { file ->
-            val name = file.name.lowercase()
-            if (interestingExtensions.any { name.endsWith(it) }) {
-                results.add(ScanFinding("INFO", "File in Downloads", "${file.name} (file name only; contents not inspected)"))
-            }
         }
         return results
     }
