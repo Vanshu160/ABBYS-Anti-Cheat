@@ -7,12 +7,12 @@ import java.net.URL
 
 object Config {
     /** Base URL of your ABBYS server. Must be https (cleartext is disabled in the manifest). */
-    const val SERVER_URL = "https://YOUR-SERVER.example"
+    const val SERVER_URL = "https://abbys-anticheat.onrender.com"
 }
 
 /** Talks to server/server.js. Blocking: call from Dispatchers.IO. */
 object ReportClient {
-    private const val TIMEOUT_MS = 10_000
+    private const val TIMEOUT_MS = 45_000 // Render free tier can take ~30-50s to wake from sleep
 
     /** True only if the server says this PIN exists, is unused and has not expired. */
     fun verifyPin(pin: String): Boolean {
