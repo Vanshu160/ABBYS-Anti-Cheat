@@ -6,16 +6,14 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.zip.ZipFile
 
 /**
  * Looks through every folder the app is allowed to read (needs "All files access"), including trash
- * folders and Minecraft launcher/game folders. Read-only: it never opens, changes or deletes user files
+ * folders, and finds Minecraft game folders for MinecraftScanner to analyze. Read-only: it never opens, changes or deletes user files
  * other than reading mod archives' file lists and the tail of game logs.
  *
  * Limits are real and are reported in the summary finding: Android hides other apps' private data
@@ -33,10 +31,6 @@ object StorageScanner {
     private const val RECENT_MS = 7L * 24 * 3600 * 1000
     private const val MAX_HIGH = 30
     private const val MAX_GAME_DIRS = 20
-    private const val MAX_JARS_PER_DIR = 400
-    private const val MAX_JAR_ENTRIES = 20_000
-    private const val MAX_JAR_BYTES = 300L * 1024 * 1024
-    private const val MAX_LOG_BYTES = 1_000_000L
     private const val TRASH_RETENTION_SECONDS = 30L * 24 * 3600
 
     /** Distinctive names, matched inside the letters-only lowercase form of a file or folder name. */
@@ -50,39 +44,17 @@ object StorageScanner {
 
     private val EXTENSIONS = setOf("jar", "zip", "apk", "exe", "dll", "so", "lua", "json", "mcpack", "mcaddon", "rar", "7z")
 
-    /** Class-path prefixes inside a jar that belong to well-known cheat clients. */
-    private val CLASS_MARKERS = listOf(
-        "net/ccbluex/liquidbounce" to "LiquidBounce",
-        "net/wurstclient" to "Wurst",
-        "meteordevelopment/meteorclient" to "Meteor Client",
-        "org/bleachhack" to "BleachHack",
-        "me/ionar/salhack" to "SalHack",
-        "org/kamiblue" to "KAMI Blue"
-    )
-
-    private val LOG_MARKERS = listOf(
-        "liquidbounce" to "LiquidBounce", "wurstclient" to "Wurst", "meteor client" to "Meteor Client",
-        "bleachhack" to "BleachHack", "salhack" to "SalHack", "kamiblue" to "KAMI Blue",
-        "aristois" to "Aristois", "rusherhack" to "RusherHack"
-    )
-
-    private val LAUNCHER_PACKAGES = mapOf(
-        "net.kdt.pojavlaunch" to "PojavLauncher",
-        "net.kdt.pojavlaunch.debug" to "PojavLauncher (debug)",
-        "git.artdeell.mojo" to "MojoLauncher",
-        "com.movtery.zalithlauncher" to "ZalithLauncher",
-        "com.tungsten.fcl" to "Fold Craft Launcher"
-    )
-
     private val BENIGN_HIDDEN = setOf(".android_secure", ".thumbnails", ".cache", ".nomedia", ".estrongs", ".face", ".data", ".gs_fs0", ".dcim")
     private val HIDDEN_CODE_EXT = setOf("apk", "so", "jar", "dex", "lua")
     private val TRASH_NAMES = setOf(".recycle", ".recyclebin", "recyclebin", "recycle_bin", "trash", "recently deleted")
     private val TRASHED_FILE = Regex("^\\.trashed-(\\d+)-(.+)$")
 
+    class Result(val findings: List<ScanFinding>, val gameDirs: List<File>)
+
     private class Node(val dir: File, val depth: Int, val inTrash: Boolean, val hidden: Boolean)
     private class Trashed(val original: String, val expirySeconds: Long)
 
-    private class State(val deadline: Long) {
+    private class State(val deadline: Long) : FindingSink {
         var files = 0
         var dirs = 0
         var unreadable = 0
@@ -99,7 +71,7 @@ object StorageScanner {
 
         fun expired() = System.currentTimeMillis() > deadline
 
-        fun flag(key: String, f: ScanFinding) {
+        override fun flag(key: String, f: ScanFinding) {
             if (!seen.add(key)) return
             if (f.severity == "HIGH") {
                 if (high.size < MAX_HIGH) high.add(f) else overflow++
@@ -109,27 +81,24 @@ object StorageScanner {
         }
     }
 
-    fun scan(context: Context): List<ScanFinding> {
+    fun scan(context: Context): Result {
         if (!hasAllFilesPermission(context)) {
-            return listOf(
-                ScanFinding(
-                    "INFO", "Storage scan skipped",
-                    "All Files Access was not granted, so folders, trash and launcher data were not inspected. This part of the scan is incomplete."
-                )
+            return Result(
+                listOf(
+                    ScanFinding(
+                        "INFO", "Storage scan skipped",
+                        "All Files Access was not granted, so folders, trash and launcher data were not inspected. This part of the scan is incomplete."
+                    )
+                ),
+                emptyList()
             )
         }
 
         val st = State(System.currentTimeMillis() + TIME_BUDGET_MS)
         val roots = storageRoots(context)
-        val extra = launcherFindings(context, st)
-
-        for (root in roots + extra) {
+        for (root in roots) {
             if (st.stopReason != null) break
             walk(root, st)
-        }
-        for (g in st.gameDirs) {
-            if (st.expired()) break
-            analyzeGameDir(g, st)
         }
         mediaStoreTrash(context, st)
 
@@ -148,7 +117,7 @@ object StorageScanner {
                     "Permanently deleted files cannot be recovered, so no findings is not proof of a clean device."
             )
         )
-        return out
+        return Result(out, st.gameDirs)
     }
 
     private fun storageRoots(context: Context): List<File> {
@@ -161,34 +130,6 @@ object StorageScanner {
             if (i > 0) roots.add(File(p.substring(0, i)))
         }
         return roots.toList()
-    }
-
-    /** Reports installed Minecraft launchers; returns their data folders when Android lets us read them. */
-    private fun launcherFindings(context: Context, st: State): List<File> {
-        val readable = ArrayList<File>()
-        val pm = context.packageManager
-        for ((pkg, label) in LAUNCHER_PACKAGES) {
-            val installed = try {
-                @Suppress("DEPRECATION")
-                pm.getPackageInfo(pkg, 0)
-                true
-            } catch (e: Exception) {
-                false
-            }
-            if (!installed) continue
-            st.flag("lp:$pkg", ScanFinding("INFO", "Minecraft launcher installed", "$label ($pkg)"))
-            @Suppress("DEPRECATION")
-            val data = File(Environment.getExternalStorageDirectory(), "Android/data/$pkg/files")
-            if (data.listFiles() != null) {
-                readable.add(data)
-            } else {
-                st.flag(
-                    "lpd:$pkg",
-                    ScanFinding("INFO", "Launcher data folder not readable", "Android protects $label's private folder on this device, so its contents were not inspected.")
-                )
-            }
-        }
-        return readable
     }
 
     private fun isSymlink(f: File): Boolean = try {
@@ -237,7 +178,7 @@ object StorageScanner {
             }
             if (children == null) { st.unreadable++; continue }
             st.dirs++
-            if (st.gameDirs.size < MAX_GAME_DIRS && looksLikeGameDir(node.dir)) st.gameDirs.add(node.dir)
+            if (st.gameDirs.size < MAX_GAME_DIRS && (node.dir.name.equals(".minecraft", true) || looksLikeGameDir(node.dir))) st.gameDirs.add(node.dir)
 
             for (child in children) {
                 if (isSymlink(child)) continue
@@ -297,14 +238,14 @@ object StorageScanner {
         }
         val ext = f.name.substringAfterLast('.', "").lowercase()
         val kb = f.length() / 1024
-        if (ext == "apk" && st.apkN < MAX_APK && System.currentTimeMillis() - f.lastModified() <= RECENT_MS) {
+        if (ext == "apk" && !f.path.contains("/Download/") && st.apkN < MAX_APK && System.currentTimeMillis() - f.lastModified() <= RECENT_MS) {
             st.apkN++
             st.flag(
                 "a:" + f.path,
                 ScanFinding("INFO", "Recently modified APK", "${f.path} modified $modified, $kb KB. Downloads and installers create these routinely; context only.")
             )
         }
-        if (ext == "so" && st.soN < MAX_SO && !f.path.contains("/Android/")) {
+        if (ext == "so" && st.soN < MAX_SO && !f.path.contains("/Android/") && !f.path.contains("/Download/")) {
             st.soN++
             st.flag(
                 "s:" + f.path,
@@ -359,107 +300,6 @@ object StorageScanner {
             }
         } catch (e: Exception) {
             // MediaStore trash is a bonus source; the file walk above already covers visible trash files.
-        }
-    }
-
-    private fun analyzeGameDir(dir: File, st: State) {
-        val mods = File(dir, "mods")
-        val jars = mods.listFiles()?.filter {
-            val n = it.name.lowercase()
-            it.isFile && (n.endsWith(".jar") || n.endsWith(".jar.disabled"))
-        }
-        if (jars != null) {
-            st.flag("m:" + mods.path, ScanFinding("INFO", "Minecraft mods folder", "${jars.size} mod file(s) in ${mods.path}"))
-            for (j in jars.take(MAX_JARS_PER_DIR)) {
-                if (st.expired()) return
-                inspectJar(j, st)
-            }
-        }
-
-        File(dir, "versions").listFiles()?.filter { it.isDirectory }?.forEach { v ->
-            matchName(v.name)?.let {
-                st.flag(
-                    "v:" + v.path,
-                    ScanFinding("WARN", "Game version name resembles a cheat client", "${v.path} matched \"$it\". Name match only.")
-                )
-            }
-        }
-
-        File(dir, "resourcepacks").listFiles()?.forEach { p ->
-            val letters = p.name.lowercase().filter { it.isLetter() }
-            if (letters.contains("xray")) {
-                st.flag(
-                    "x:" + p.path,
-                    ScanFinding("WARN", "Resource pack name suggests X-ray", "${p.path}. Name match only; some X-ray packs are allowed on some servers.")
-                )
-            }
-        }
-
-        for (log in listOf(File(dir, "logs/latest.log"), File(dir, "latestlog.txt"), File(dir, "logs/debug.log"))) {
-            if (st.expired()) return
-            scanLog(log, st)
-        }
-    }
-
-    /** Reads only the archive's file list (never inflates entries), so zip bombs cannot hurt. */
-    private fun inspectJar(jar: File, st: State) {
-        if (jar.length() > MAX_JAR_BYTES) {
-            st.flag("j:" + jar.path, ScanFinding("INFO", "Large mod file not opened", "${jar.path} is over ${MAX_JAR_BYTES / (1024 * 1024)} MB."))
-            return
-        }
-        try {
-            ZipFile(jar).use { zip ->
-                var n = 0
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    if (++n > MAX_JAR_ENTRIES) {
-                        st.flag("j:" + jar.path, ScanFinding("INFO", "Mod file only partly inspected", "${jar.path} has more than $MAX_JAR_ENTRIES entries."))
-                        return@use
-                    }
-                    val entry = entries.nextElement().name.lowercase()
-                    val hit = CLASS_MARKERS.firstOrNull { entry.startsWith(it.first) }
-                    if (hit != null) {
-                        st.flag(
-                            "j:" + jar.path,
-                            ScanFinding(
-                                "HIGH", "Mod file contains a known cheat client's code",
-                                "${jar.path} contains classes under \"${hit.first}\" (${hit.second}). This is based on the archive's contents, not just its name; an admin should confirm."
-                            )
-                        )
-                        return@use
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            st.flag("j:" + jar.path, ScanFinding("INFO", "Mod file is not a readable archive", "${jar.path} could not be opened as a jar/zip."))
-        }
-    }
-
-    /** Reads at most the last MAX_LOG_BYTES; only the marker name and file are reported, never log lines. */
-    private fun scanLog(file: File, st: State) {
-        if (!file.isFile) return
-        try {
-            RandomAccessFile(file, "r").use { raf ->
-                val len = raf.length()
-                val size = minOf(len, MAX_LOG_BYTES).toInt()
-                raf.seek(len - size)
-                val buf = ByteArray(size)
-                raf.readFully(buf)
-                val text = String(buf, Charsets.UTF_8).lowercase()
-                for ((marker, label) in LOG_MARKERS) {
-                    if (text.contains(marker)) {
-                        st.flag(
-                            "l:" + file.path + marker,
-                            ScanFinding(
-                                "WARN", "Game log mentions $label",
-                                "${file.path} (last ${size / 1024} KB). Text mention only; a log can name a client without it having been used."
-                            )
-                        )
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            // unreadable log: nothing to report
         }
     }
 }

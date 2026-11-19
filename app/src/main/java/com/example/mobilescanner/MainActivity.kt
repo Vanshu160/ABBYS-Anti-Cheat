@@ -117,7 +117,7 @@ fun ScannerApp() {
                         "last 15 minutes, whether USB debugging is on, and basic root/debugger indicators. With All " +
                         "Files Access it also lists file and folder names (with last-modified times) across your storage and trash, " +
                         "and, if you pick one, the folder you choose. It also looks " +
-                        "inside Minecraft launcher folders (mod file lists and recent game logs). It does not read " +
+                        "inside Minecraft Java and Bedrock folders (mod file lists, configs, resource packs and recent game logs). It does not read " +
                         "messages, photos, launcher login data or game worlds. " +
                         "The result is sent to the admin who gave you this PIN.",
                     fontSize = 12.sp,
@@ -169,17 +169,18 @@ fun ScannerApp() {
                 Spacer(modifier = Modifier.height(20.dp))
 
                 OutlinedButton(
-                    onClick = { treeLauncher.launch(null) },
+                    onClick = { treeLauncher.launch(androidDataHint()) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        if (safTree == null) "Select Game OBB/Data Folder (optional)"
+                        if (safTree == null) "3. Select Launcher / Minecraft Folder (Android/data)"
                         else "Folder selected: ${folderLabel(safTree!!)} (tap to change)"
                     )
                 }
                 Text(
-                    "Optional. Pick the game's Android/obb or Android/data folder if Android allows it; the scan lists " +
-                        "recently changed .so, .cfg, .lua and .pak files there. Android 11+ may refuse these folders.",
+                    "Optional. Pick the launcher's .minecraft folder or the com.mojang folder (Bedrock). Mods, configs, logs and " +
+                        "packs inside are checked, plus recently changed .so, .cfg, .lua and .pak files. Android 11+ may refuse " +
+                        "Android/data itself; folders under /games usually work.",
                     fontSize = 11.sp,
                     color = Color.LightGray
                 )
@@ -323,6 +324,13 @@ fun requestAllFiles(context: Context, legacyLauncher: ActivityResultLauncher<Str
     } else {
         legacyLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
+}
+
+/** Starts the folder picker at Android/data when the system allows it. */
+fun androidDataHint(): Uri? = try {
+    android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Android/data")
+} catch (e: Exception) {
+    null
 }
 
 fun folderLabel(uri: Uri): String = try {
