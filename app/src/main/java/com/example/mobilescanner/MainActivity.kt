@@ -89,8 +89,10 @@ fun ScannerApp() {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     "This scan reads: names of installed apps, enabled accessibility services, apps used in the " +
-                        "last 15 minutes, file names in Downloads, whether USB debugging is on, and basic " +
-                        "root/debugger indicators. It does not read file contents, messages, photos or game worlds. " +
+                        "last 15 minutes, whether USB debugging is on, and basic root/debugger indicators. With All " +
+                        "Files Access it also lists file and folder names across your storage and trash, and looks " +
+                        "inside Minecraft launcher folders (mod file lists and recent game logs). It does not read " +
+                        "messages, photos, launcher login data or game worlds. " +
                         "The result is sent to the admin who gave you this PIN.",
                     fontSize = 12.sp,
                     color = Color.LightGray
@@ -173,7 +175,7 @@ fun ScannerApp() {
                     scanProgress = 0.35f
                     delay(600)
 
-                    scanStatusText = "Checking recent apps & storage..."
+                    scanStatusText = "Checking recent apps, storage, trash and Minecraft folders (can take a minute)..."
                     scanProgress = 0.70f
                     val results = withContext(Dispatchers.IO) {
                         CheatScanner.runFullScan(context)
