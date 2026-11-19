@@ -18,3 +18,19 @@ button { width: 100%; padding: 14px; background: #0284c7; color: white; border: 
 .sev { font-weight: 700; font-size: 12px; }
 .detail { font-size: 13px; color: #9ca3af; margin-top: 4px; word-break: break-all; }
 .hidden { display: none; }
+.row { display: flex; gap: 14px; flex-wrap: wrap; }
+.col { flex: 1 1 220px; }
+button:disabled { opacity: .6; cursor: default; }
+button.ghost { width: auto; padding: 8px 14px; background: #1e293b; color: #cbd5e1; font-size: 13px; }
+.pin-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 13px; color: #9ca3af; }
+.report-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.muted { color: #6b7280; font-size: 14px; font-weight: 400; }
+.summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.count { background: #090d16; border: 1px solid #1f2937; border-radius: 8px; padding: 8px 14px; font-size: 13px; }
+.count b { font-size: 18px; margin-right: 6px; }
+.count.HIGH b { color: #ef4444; } .count.WARN b { color: #f59e0b; } .count.INFO b { color: #38bdf8; } .count.CLEAN b { color: #10b981; }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.chip { width: auto; padding: 6px 14px; background: #1e293b; color: #94a3b8; font-size: 12px; border-radius: 99px; }
+.chip.active { background: #0284c7; color: #fff; }
+.finding.INFO { border-left-color: #38bdf8; }
+@media (max-width: 480px) { .pin-box { font-size: 28px; letter-spacing: 5px; } }

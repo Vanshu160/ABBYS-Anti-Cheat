@@ -12,23 +12,45 @@
     <span class="badge">Self-Hosted SS Panel</span>
   </header>
 
-  <div class="card">
-    <label for="adminKey">Admin key (kept only for this browser tab):</label>
-    <input type="password" id="adminKey" autocomplete="off" />
-
-    <label for="adminName">Admin name:</label>
-    <input type="text" id="adminName" placeholder="e.g. Vanshu" />
-
+  <section class="card">
+    <div class="row">
+      <div class="col">
+        <label for="adminKey">Admin key (kept only in this tab's memory)</label>
+        <input type="password" id="adminKey" autocomplete="off" />
+      </div>
+      <div class="col">
+        <label for="adminName">Admin name</label>
+        <input type="text" id="adminName" placeholder="e.g. Vanshu" maxlength="40" />
+      </div>
+    </div>
     <button id="genBtn" type="button">Generate 6-digit SS PIN</button>
-    <div id="pinDisplay" class="pin-box hidden"></div>
-    <p id="statusText" class="status">Ready to generate PIN.</p>
-  </div>
 
-  <div id="reportContainer" class="card hidden">
-    <h3>Scan results (<span id="reportPin"></span>)</h3>
+    <div id="pinWrap" class="hidden">
+      <div id="pinDisplay" class="pin-box" aria-live="polite"></div>
+      <div class="pin-meta">
+        <span id="countdown"></span>
+        <button id="copyPin" type="button" class="ghost">Copy PIN</button>
+      </div>
+    </div>
+    <p id="statusText" class="status">Ready to generate PIN.</p>
+  </section>
+
+  <section id="reportContainer" class="card hidden">
+    <div class="report-head">
+      <h3>Scan results <span id="reportPin" class="muted"></span></h3>
+      <button id="copyReport" type="button" class="ghost">Copy report</button>
+    </div>
+    <div id="summary" class="summary"></div>
+    <div id="filters" class="filters" role="group" aria-label="Filter by severity">
+      <button type="button" data-f="ALL" class="chip active">All</button>
+      <button type="button" data-f="HIGH" class="chip">High</button>
+      <button type="button" data-f="WARN" class="chip">Warn</button>
+      <button type="button" data-f="INFO" class="chip">Info</button>
+      <button type="button" data-f="CLEAN" class="chip">Clean</button>
+    </div>
     <p class="note">Findings are indicators for review, not proof. Name matches in particular can be wrong.</p>
     <div id="reportList"></div>
-  </div>
+  </section>
 
   <script src="app.js"></script>
 </body>
