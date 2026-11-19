@@ -42,7 +42,9 @@ object CheatScanner {
         findings.addAll(checkInstalledPackages(context))
         findings.addAll(checkAccessibility(context))
         findings.addAll(checkRecentUsage(context))
-        findings.addAll(StorageScanner.scan(context))
+        val storage = StorageScanner.scan(context)
+        findings.addAll(storage.findings)
+        findings.addAll(MinecraftScanner.scan(context, storage.gameDirs, safTree))
         findings.addAll(SafFolderScanner.scan(context, safTree))
         findings.addAll(checkDeveloperSettings(context))
 
