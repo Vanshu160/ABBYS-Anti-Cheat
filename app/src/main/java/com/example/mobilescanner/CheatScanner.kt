@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
@@ -34,7 +35,7 @@ object CheatScanner {
         "com.android.vending", "com.sec.android.app.samsungapps", "com.amazon.venezia", "org.fdroid.fdroid"
     )
 
-    fun runFullScan(context: Context): List<ScanFinding> {
+    fun runFullScan(context: Context, safTree: Uri? = null): List<ScanFinding> {
         val findings = mutableListOf<ScanFinding>()
 
         findings.addAll(NativeBridge.getNativeFindings())
@@ -42,6 +43,7 @@ object CheatScanner {
         findings.addAll(checkAccessibility(context))
         findings.addAll(checkRecentUsage(context))
         findings.addAll(StorageScanner.scan(context))
+        findings.addAll(SafFolderScanner.scan(context, safTree))
         findings.addAll(checkDeveloperSettings(context))
 
         return capFindings(findings)

@@ -26,7 +26,11 @@ object StorageScanner {
     private const val MAX_FILES = 300_000
     private const val MAX_DEPTH = 14
     private const val TIME_BUDGET_MS = 90_000L
-    private const val MAX_FLAGS = 60
+    private const val MAX_FLAGS = 100
+    private const val MAX_HIDDEN = 25
+    private const val MAX_APK = 15
+    private const val MAX_SO = 20
+    private const val RECENT_MS = 7L * 24 * 3600 * 1000
     private const val MAX_HIGH = 30
     private const val MAX_GAME_DIRS = 20
     private const val MAX_JARS_PER_DIR = 400
@@ -70,10 +74,12 @@ object StorageScanner {
         "com.tungsten.fcl" to "Fold Craft Launcher"
     )
 
+    private val BENIGN_HIDDEN = setOf(".android_secure", ".thumbnails", ".cache", ".nomedia", ".estrongs", ".face", ".data", ".gs_fs0", ".dcim")
+    private val HIDDEN_CODE_EXT = setOf("apk", "so", "jar", "dex", "lua")
     private val TRASH_NAMES = setOf(".recycle", ".recyclebin", "recyclebin", "recycle_bin", "trash", "recently deleted")
     private val TRASHED_FILE = Regex("^\\.trashed-(\\d+)-(.+)$")
 
-    private class Node(val dir: File, val depth: Int, val inTrash: Boolean)
+    private class Node(val dir: File, val depth: Int, val inTrash: Boolean, val hidden: Boolean)
     private class Trashed(val original: String, val expirySeconds: Long)
 
     private class State(val deadline: Long) {
@@ -81,6 +87,9 @@ object StorageScanner {
         var dirs = 0
         var unreadable = 0
         var trashItems = 0
+        var hiddenN = 0
+        var apkN = 0
+        var soN = 0
         var stopReason: String? = null
         var overflow = 0
         val flags = ArrayList<ScanFinding>()
@@ -101,7 +110,7 @@ object StorageScanner {
     }
 
     fun scan(context: Context): List<ScanFinding> {
-        if (!hasAllFilesPermission()) {
+        if (!hasAllFilesPermission(context)) {
             return listOf(
                 ScanFinding(
                     "INFO", "Storage scan skipped",
@@ -216,7 +225,7 @@ object StorageScanner {
 
     private fun walk(root: File, st: State) {
         val stack = ArrayDeque<Node>()
-        stack.addLast(Node(root, 0, false))
+        stack.addLast(Node(root, 0, false, false))
         while (stack.isNotEmpty()) {
             if (st.expired()) { st.stopReason = "time limit reached"; return }
             if (st.files >= MAX_FILES) { st.stopReason = "file limit reached"; return }
@@ -239,18 +248,30 @@ object StorageScanner {
                             ScanFinding("WARN", "Folder name resembles a Minecraft cheat client", "${child.path} matched \"$it\". Name match only; verify before drawing conclusions.")
                         )
                     }
+                    val lower = child.name.lowercase()
+                    val hiddenDir = lower.startsWith(".") && !isTrashDirName(lower) && lower !in BENIGN_HIDDEN
+                    if (hiddenDir && !node.hidden && node.depth <= 3 && st.hiddenN < MAX_HIDDEN) {
+                        st.hiddenN++
+                        st.flag(
+                            "h:" + child.path,
+                            ScanFinding("INFO", "Hidden folder", "${child.path} (last modified ${ts(child)}). Hidden folders are common; this is context, not a finding by itself.")
+                        )
+                    }
                     if (node.depth < MAX_DEPTH) {
-                        stack.addLast(Node(child, node.depth + 1, node.inTrash || isTrashDirName(child.name.lowercase())))
+                        stack.addLast(Node(child, node.depth + 1, node.inTrash || isTrashDirName(lower), node.hidden || hiddenDir))
                     }
                 } else {
                     st.files++
-                    handleFile(child, node.inTrash, st)
+                    handleFile(child, node.inTrash, node.hidden, st)
                 }
             }
         }
     }
 
-    private fun handleFile(f: File, inTrash: Boolean, st: State) {
+    private fun ts(f: File): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(f.lastModified()))
+
+    private fun handleFile(f: File, inTrash: Boolean, hidden: Boolean, st: State) {
         val trashed = parseTrashed(f.name)
         if (trashed != null) {
             st.trashItems++
@@ -267,10 +288,33 @@ object StorageScanner {
             }
             return
         }
+        val modified by lazy { ts(f) }
         matchFile(f.name)?.let {
             st.flag(
                 "f:" + f.path,
-                ScanFinding("WARN", "File name resembles a Minecraft cheat client", "${f.path} matched \"$it\". Name match only; verify before drawing conclusions.")
+                ScanFinding("WARN", "File name resembles a Minecraft cheat client", "${f.path} matched \"$it\". Modified $modified. Name match only; verify before drawing conclusions.")
+            )
+        }
+        val ext = f.name.substringAfterLast('.', "").lowercase()
+        val kb = f.length() / 1024
+        if (ext == "apk" && st.apkN < MAX_APK && System.currentTimeMillis() - f.lastModified() <= RECENT_MS) {
+            st.apkN++
+            st.flag(
+                "a:" + f.path,
+                ScanFinding("INFO", "Recently modified APK", "${f.path} modified $modified, $kb KB. Downloads and installers create these routinely; context only.")
+            )
+        }
+        if (ext == "so" && st.soN < MAX_SO && !f.path.contains("/Android/")) {
+            st.soN++
+            st.flag(
+                "s:" + f.path,
+                ScanFinding("WARN", "Native library (.so) in shared storage", "${f.path} modified $modified, $kb KB. Apps normally keep these in private folders; unusual here but not proof of anything.")
+            )
+        }
+        if (hidden && ext in HIDDEN_CODE_EXT) {
+            st.flag(
+                "hc:" + f.path,
+                ScanFinding("WARN", "Code or native file inside a hidden folder", "${f.path} modified $modified, $kb KB. Hidden folders can hold legitimate app data; verify before drawing conclusions.")
             )
         }
     }

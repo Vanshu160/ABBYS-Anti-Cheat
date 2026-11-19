@@ -1,8 +1,10 @@
 package com.example.mobilescanner
 
+import android.Manifest
 import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -10,7 +12,10 @@ import android.os.Environment
 import android.os.Process
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,10 +28,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -67,6 +76,22 @@ fun ScannerApp() {
     var verifying by remember { mutableStateOf(false) }
     var pinError by remember { mutableStateOf<String?>(null) }
     var uploadStatus by remember { mutableStateOf("") }
+    var permTick by remember { mutableIntStateOf(0) }
+    var safTree by remember { mutableStateOf<Uri?>(null) }
+
+    // Re-check permissions every time the player comes back from a settings screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) permTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val usageOk = remember(permTick) { hasUsageStatsPermission(context) }
+    val filesOk = remember(permTick) { hasAllFilesPermission(context) }
+    val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> safTree = uri }
+    val storagePermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permTick++ }
 
     Column(
         modifier = Modifier
@@ -90,7 +115,8 @@ fun ScannerApp() {
                 Text(
                     "This scan reads: names of installed apps, enabled accessibility services, apps used in the " +
                         "last 15 minutes, whether USB debugging is on, and basic root/debugger indicators. With All " +
-                        "Files Access it also lists file and folder names across your storage and trash, and looks " +
+                        "Files Access it also lists file and folder names (with last-modified times) across your storage and trash, " +
+                        "and, if you pick one, the folder you choose. It also looks " +
                         "inside Minecraft launcher folders (mod file lists and recent game logs). It does not read " +
                         "messages, photos, launcher login data or game worlds. " +
                         "The result is sent to the admin who gave you this PIN.",
@@ -135,37 +161,41 @@ fun ScannerApp() {
                 Text("Required Permissions", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Button(
-                    onClick = {
-                        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("1. Grant Usage Access")
+                PermissionRow("Usage Access", usageOk) {
+                    context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                 }
                 Spacer(modifier = Modifier.height(12.dp))
+                PermissionRow("All Files Access", filesOk) { requestAllFiles(context, storagePermLauncher) }
+                Spacer(modifier = Modifier.height(20.dp))
 
-                Button(
-                    onClick = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                                data = Uri.parse("package:${context.packageName}")
-                            }
-                            context.startActivity(intent)
-                        }
-                    },
+                OutlinedButton(
+                    onClick = { treeLauncher.launch(null) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("2. Grant All Files Access")
+                    Text(
+                        if (safTree == null) "Select Game OBB/Data Folder (optional)"
+                        else "Folder selected: ${folderLabel(safTree!!)} (tap to change)"
+                    )
                 }
-                Spacer(modifier = Modifier.height(32.dp))
+                Text(
+                    "Optional. Pick the game's Android/obb or Android/data folder if Android allows it; the scan lists " +
+                        "recently changed .so, .cfg, .lua and .pak files there. Android 11+ may refuse these folders.",
+                    fontSize = 11.sp,
+                    color = Color.LightGray
+                )
+                Spacer(modifier = Modifier.height(24.dp))
 
                 Button(
                     onClick = { currentStep = ScanStep.SCANNING },
+                    enabled = usageOk && filesOk,
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                 ) {
                     Text("Start Scan", color = Color.White)
+                }
+                if (!(usageOk && filesOk)) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Grant both permissions to start the scan.", fontSize = 12.sp, color = Color(0xFFEF9A9A))
                 }
             }
 
@@ -178,7 +208,7 @@ fun ScannerApp() {
                     scanStatusText = "Checking recent apps, storage, trash and Minecraft folders (can take a minute)..."
                     scanProgress = 0.70f
                     val results = withContext(Dispatchers.IO) {
-                        CheatScanner.runFullScan(context)
+                        CheatScanner.runFullScan(context, safTree)
                     }
 
                     scanStatusText = "Finalizing report..."
@@ -273,8 +303,59 @@ fun hasUsageStatsPermission(context: Context): Boolean {
     return mode == AppOpsManager.MODE_ALLOWED
 }
 
-fun hasAllFilesPermission(): Boolean {
+fun hasAllFilesPermission(context: Context): Boolean {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         Environment.isExternalStorageManager()
-    } else true
+    } else {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
+fun requestAllFiles(context: Context, legacyLauncher: ActivityResultLauncher<String>) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))
+            )
+        } catch (e: Exception) {
+            context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+    } else {
+        legacyLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+}
+
+fun folderLabel(uri: Uri): String = try {
+    android.provider.DocumentsContract.getTreeDocumentId(uri)
+} catch (e: Exception) {
+    "selected folder"
+}
+
+@Composable
+fun PermissionRow(label: String, granted: Boolean, onGrant: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Surface(
+                color = if (granted) Color(0xFF1B5E20) else Color(0xFFB71C1C),
+                shape = RoundedCornerShape(6.dp)
+            ) {
+                Text(
+                    if (granted) "GRANTED" else "NOT GRANTED",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
+        Button(onClick = onGrant, enabled = !granted) {
+            Text(if (granted) "Done" else "Grant")
+        }
+    }
 }
