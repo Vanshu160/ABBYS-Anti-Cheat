@@ -13,16 +13,8 @@
   </header>
 
   <section class="card">
-    <div class="row">
-      <div class="col">
-        <label for="adminKey">Admin key (kept only in this tab's memory)</label>
-        <input type="password" id="adminKey" autocomplete="off" />
-      </div>
-      <div class="col">
-        <label for="adminName">Admin name</label>
-        <input type="text" id="adminName" placeholder="e.g. Vanshu" maxlength="40" />
-      </div>
-    </div>
+    <label for="adminName">Your name (optional)</label>
+    <input type="text" id="adminName" placeholder="e.g. Vanshu" maxlength="40" />
     <button id="genBtn" type="button">Generate 6-digit SS PIN</button>
 
     <div id="pinWrap" class="hidden">

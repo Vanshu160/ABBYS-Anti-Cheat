@@ -1,16 +1,16 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-const keyEl = $("adminKey"), nameEl = $("adminName"), statusEl = $("statusText");
+const nameEl = $("adminName"), statusEl = $("statusText");
 const pinEl = $("pinDisplay"), pinWrap = $("pinWrap"), countdownEl = $("countdown");
 const reportBox = $("reportContainer"), reportList = $("reportList"), summaryEl = $("summary");
 const SEVERITIES = ["HIGH", "WARN", "INFO", "CLEAN"];
 const TTL_MS = 30 * 60 * 1000;
-let pollTimer = null, tickTimer = null, currentPin = null, report = [], filter = "ALL";
+let sessionToken = null, pollTimer = null, tickTimer = null, currentPin = null, report = [], filter = "ALL";
 
 // Only the non-secret name is remembered, and only for this tab. The key is never stored.
 nameEl.value = sessionStorage.getItem("abbys_admin") || "";
 
-const headers = () => ({ "Content-Type": "application/json", "x-admin-key": keyEl.value });
+const headers = () => ({ "Content-Type": "application/json", "x-session-token": sessionToken || "" });
 const sevOf = (i) => (SEVERITIES.includes(i.severity) ? i.severity : "INFO");
 const stopTimers = () => { clearInterval(pollTimer); clearInterval(tickTimer); };
 
@@ -92,10 +92,10 @@ $("genBtn").addEventListener("click", async () => {
   btn.disabled = true;
   try {
     const res = await fetch("/api/create-pin", { method: "POST", headers: headers(), body: JSON.stringify({ admin }) });
-    if (res.status === 401) { statusEl.textContent = "Wrong admin key."; return; }
     if (res.status === 429) { statusEl.textContent = "Too many requests. Wait a minute and retry."; return; }
     if (!res.ok) { statusEl.textContent = "Server error (" + res.status + ")."; return; }
-    const { pin } = await res.json();
+    const { pin, token } = await res.json();
+    sessionToken = token; // held in memory only; needed to read this PIN's report
     currentPin = pin;
     pinEl.textContent = pin;
     pinWrap.classList.remove("hidden");

@@ -3,16 +3,9 @@ const express = require("express");
 const crypto = require("crypto");
 const path = require("path");
 
-// Required: a long random secret that only admins know. Example:
-//   ADMIN_KEY=$(openssl rand -hex 24) npm start
-const ADMIN_KEY = process.env.ADMIN_KEY || "";
-if (ADMIN_KEY.length < 16) {
-  console.error("Refusing to start: set ADMIN_KEY to a secret of at least 16 characters.");
-  process.exit(1);
-}
-
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_SESSIONS = 1000;
+const MAX_SESSIONS_PER_IP = 5;
 const MAX_FINDINGS = 200;
 const SEVERITIES = new Set(["HIGH", "WARN", "INFO", "CLEAN"]);
 
@@ -33,7 +26,7 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, "public")));
 
-/** pin -> { pin, admin, status: PENDING|COMPLETED, report, createdAt } */
+/** pin -> { pin, token, ip, admin, status: PENDING|COMPLETED, report, createdAt } */
 const sessions = new Map();
 
 setInterval(() => {
@@ -52,13 +45,6 @@ function safeEqual(a, b) {
   const x = Buffer.from(String(a));
   const y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
-
-function requireAdmin(req, res, next) {
-  if (!safeEqual(req.get("x-admin-key") || "", ADMIN_KEY)) {
-    return res.status(401).json({ error: "unauthorized" });
-  }
-  next();
 }
 
 const hits = new Map();
@@ -109,16 +95,21 @@ function sanitizeReport(report) {
 
 // --- API -------------------------------------------------------------------------------------
 
-// 1. Admin creates a PIN
-app.post("/api/create-pin", requireAdmin, rateLimit("create", 30, 60 * 1000), (req, res) => {
+// 1. Anyone can create a PIN. The reply carries a secret token that only the creator's browser
+//    holds; it is required to read the report, so other people cannot read it by guessing PINs.
+app.post("/api/create-pin", rateLimit("create", 10, 60 * 1000), (req, res) => {
   if (sessions.size >= MAX_SESSIONS) return res.status(503).json({ error: "too many open sessions" });
+  let open = 0;
+  for (const v of sessions.values()) if (v.ip === req.ip && v.status === "PENDING") open++;
+  if (open >= MAX_SESSIONS_PER_IP) return res.status(429).json({ error: "too many open PINs; use or wait for the earlier ones to expire" });
   let pin;
   do {
     pin = String(crypto.randomInt(100000, 1000000));
   } while (sessions.has(pin));
+  const token = crypto.randomBytes(24).toString("hex");
   const admin = clean(req.body && req.body.admin, 60) || "Admin";
-  sessions.set(pin, { pin, admin, status: "PENDING", report: null, createdAt: Date.now() });
-  res.json({ pin, expiresInSeconds: SESSION_TTL_MS / 1000 });
+  sessions.set(pin, { pin, token, ip: req.ip, admin, status: "PENDING", report: null, createdAt: Date.now() });
+  res.json({ pin, token, expiresInSeconds: SESSION_TTL_MS / 1000 });
 });
 
 // 2. Player app checks the PIN (rate limited: a 6-digit PIN must not be guessable)
@@ -139,10 +130,10 @@ app.post("/api/submit-report/:pin", rateLimit("submit", 10, 60 * 1000), (req, re
   res.json({ success: true });
 });
 
-// 4. Admin dashboard polls for the result
-app.get("/api/session/:pin", requireAdmin, rateLimit("session", 120, 60 * 1000), (req, res) => {
+// 4. The creator's dashboard polls for the result, proving itself with the session token
+app.get("/api/session/:pin", rateLimit("session", 120, 60 * 1000), (req, res) => {
   const s = liveSession(req.params.pin);
-  if (!s) return res.status(404).json({ error: "Not found or expired" });
+  if (!s || !safeEqual(req.get("x-session-token") || "", s.token)) return res.status(404).json({ error: "Not found or expired" });
   res.json({ pin: s.pin, admin: s.admin, status: s.status, report: s.report, createdAt: s.createdAt });
 });
 
