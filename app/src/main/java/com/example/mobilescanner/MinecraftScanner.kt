@@ -490,6 +490,17 @@ object MinecraftScanner {
         return out
     }
 
+    /** Only the Downloads check (names, archives hiding behind any name, text files), for the deleted/download scan mode. */
+    fun scanDownloads(context: Context): List<ScanFinding> {
+        if (!hasAllFilesPermission(context)) {
+            return listOf(ScanFinding("INFO", "Downloads check skipped", "All Files Access was not granted, so Downloads was not inspected."))
+        }
+        val sink = McSink()
+        val run = Run(sink, System.currentTimeMillis() + TIME_BUDGET_MS)
+        downloads(run)
+        return sink.high + sink.flags
+    }
+
     private fun packageChecks(context: Context, sink: FindingSink): Set<String> {
         val installed = HashSet<String>()
         for ((pkg, label) in JAVA_LAUNCHERS) {
