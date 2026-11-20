@@ -12,6 +12,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** The scans offered on the home screen. */
+enum class ScanMode { FULL, MINECRAFT, DELETED, BROWSER }
+
 data class ScanFinding(
     val severity: String,
     val title: String,
@@ -35,19 +38,33 @@ object CheatScanner {
         "com.android.vending", "com.sec.android.app.samsungapps", "com.amazon.venezia", "org.fdroid.fdroid"
     )
 
-    fun runFullScan(context: Context, safTree: Uri? = null): List<ScanFinding> {
+    fun runFullScan(context: Context, safTree: Uri? = null): List<ScanFinding> = run(context, ScanMode.FULL, safTree)
+
+    /** Runs one of the scan modes shown on the home screen. */
+    fun run(context: Context, mode: ScanMode, safTree: Uri? = null): List<ScanFinding> {
         val findings = mutableListOf<ScanFinding>()
 
-        findings.addAll(NativeBridge.getNativeFindings())
-        findings.addAll(checkInstalledPackages(context))
-        findings.addAll(checkAccessibility(context))
-        findings.addAll(checkRecentUsage(context))
-        val storage = StorageScanner.scan(context)
-        findings.addAll(storage.findings)
-        findings.addAll(MinecraftScanner.scan(context, storage.gameDirs, safTree))
-        findings.addAll(SafFolderScanner.scan(context, safTree))
-        findings.addAll(checkDeveloperSettings(context))
-
+        if (mode == ScanMode.FULL) {
+            findings.addAll(NativeBridge.getNativeFindings())
+            findings.addAll(checkInstalledPackages(context))
+            findings.addAll(checkAccessibility(context))
+            findings.addAll(checkRecentUsage(context))
+            findings.addAll(checkDeveloperSettings(context))
+        }
+        if (mode != ScanMode.BROWSER) {
+            val storage = StorageScanner.scan(context)
+            // The Minecraft-only mode uses the storage walk just to find game folders.
+            if (mode != ScanMode.MINECRAFT) findings.addAll(storage.findings)
+            if (mode == ScanMode.DELETED) {
+                findings.addAll(MinecraftScanner.scanDownloads(context))
+            } else {
+                findings.addAll(MinecraftScanner.scan(context, storage.gameDirs, safTree))
+                if (safTree != null || mode == ScanMode.FULL) findings.addAll(SafFolderScanner.scan(context, safTree))
+            }
+        }
+        if (mode == ScanMode.FULL || mode == ScanMode.BROWSER) {
+            findings.addAll(DownloadSourceScanner.scan(context))
+        }
         return capFindings(findings)
     }
 

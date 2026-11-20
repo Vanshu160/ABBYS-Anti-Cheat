@@ -79,6 +79,9 @@ internal object Terms {
         return WEAK.filter { it in toks }
     }
 
+    /** Number of cheat-client signatures the scanner knows by name. */
+    val signatureCount: Int get() = STRONG_LONG.size + STRONG_SHORT.size
+
     fun hasEnabledTrue(line: String) = ENABLED_TRUE.containsMatchIn(line)
     fun isContextWord(t: String) = t in CONTEXT_WORDS
 }
