@@ -73,7 +73,7 @@ app.post("/api/start-session/:pin", rateLimit("start", 10, 60 * 1000), (req, res
 // 3. The player app uploads a report (as many as it likes until the session expires). The latest one
 //    is what the dashboard shows. The token travels in a header, never in the URL.
 app.post("/api/submit-report", rateLimit("submit", 20, 60 * 1000), (req, res) => {
-  const r = store.submit(req.get("x-player-token") || "", req.body && req.body.report);
+  const r = store.submit(req.get("x-player-token") || "", req.body && req.body.report, req.body && req.body.verdict);
   if (r.error === "expired") return res.status(401).json({ error: "session expired" });
   if (r.error === "invalid") return res.status(401).json({ error: "invalid session" });
   if (r.error) return res.status(400).json({ error: "report must be an array of at most " + MAX_FINDINGS + " findings" });

@@ -26,6 +26,28 @@ function sanitizeReport(report) {
   });
 }
 
+const LEVELS = new Set(["CHEAT_DETECTED", "SUSPICIOUS_ACTIVITY", "NO_CHEAT_DETECTED"]);
+const HEADLINES = { CHEAT_DETECTED: "CHEAT DETECTED", SUSPICIOUS_ACTIVITY: "SUSPICIOUS ACTIVITY", NO_CHEAT_DETECTED: "NO CHEAT DETECTED" };
+
+/** The verdict computed by the app. The headline is derived from the level so the two can never disagree. */
+function sanitizeVerdict(v) {
+  if (!v || typeof v !== "object" || !LEVELS.has(v.level)) return null;
+  const list = (a, n, f) => (Array.isArray(a) ? a.slice(0, n).map(f) : []);
+  return {
+    level: v.level,
+    headline: HEADLINES[v.level],
+    summary: clean(v.summary, 400),
+    detections: list(v.detections, 10, (d) => ({
+      client: clean(d && d.client, 80),
+      file: clean(d && d.file, 160),
+      evidence: clean(d && d.evidence, 200),
+      confidence: clean(d && d.confidence, 20),
+    })),
+    reasons: list(v.reasons, 5, (r) => clean(r, 200)),
+    limits: list(v.limits, 5, (r) => clean(r, 200)),
+  };
+}
+
 function safeEqual(a, b) {
   const x = Buffer.from(String(a));
   const y = Buffer.from(String(b));
@@ -78,7 +100,7 @@ class SessionStore {
     this.sessions.set(pin, {
       pin, token, ip, admin: clean(admin, 60) || "Admin",
       createdAt: this.now(), claimedAt: 0, expiresAt: 0, playerToken: null,
-      status: "PENDING", report: null, scans: 0, reportAt: 0,
+      status: "PENDING", report: null, verdict: null, scans: 0, reportAt: 0,
     });
     return { pin, token, expiresInSeconds: UNCLAIMED_TTL_MS / 1000 };
   }
@@ -96,7 +118,7 @@ class SessionStore {
   }
 
   /** The player uploads a report. Does not change expiresAt. */
-  submit(playerToken, rawReport) {
+  submit(playerToken, rawReport, rawVerdict) {
     const pin = typeof playerToken === "string" ? this.byPlayerToken.get(playerToken) : null;
     const s = pin && this.sessions.get(pin);
     if (!s || !safeEqual(playerToken, s.playerToken)) return { error: "invalid" };
@@ -104,6 +126,7 @@ class SessionStore {
     const report = sanitizeReport(rawReport);
     if (!report) return { error: "bad_report" };
     s.report = report;
+    s.verdict = sanitizeVerdict(rawVerdict); // null when an older app sent none
     s.status = "COMPLETED";
     s.scans++;
     s.reportAt = this.now();
@@ -117,7 +140,7 @@ class SessionStore {
     if (!s || this.now() >= this._end(s) + READ_GRACE_MS) return null;
     if (!safeEqual(adminToken || "", s.token)) return null;
     return {
-      pin: s.pin, admin: s.admin, status: s.status, report: s.report, createdAt: s.createdAt,
+      pin: s.pin, admin: s.admin, status: s.status, report: s.report, verdict: s.verdict, createdAt: s.createdAt,
       claimed: !!s.claimedAt, scans: s.scans, reportAt: s.reportAt,
       expiresAt: s.claimedAt ? s.expiresAt : s.createdAt + UNCLAIMED_TTL_MS,
       expired: !this._alive(s),
@@ -126,4 +149,4 @@ class SessionStore {
   }
 }
 
-module.exports = { SessionStore, sanitizeReport, UNCLAIMED_TTL_MS, PLAYER_SESSION_MS, READ_GRACE_MS, MAX_FINDINGS };
+module.exports = { SessionStore, sanitizeReport, sanitizeVerdict, UNCLAIMED_TTL_MS, PLAYER_SESSION_MS, READ_GRACE_MS, MAX_FINDINGS };

@@ -843,7 +843,8 @@ object MinecraftScanner {
                     "ev:$gamePath:$key",
                     ScanFinding(
                         "WARN", "Several independent traces of \"$key\"",
-                        "Under $gamePath: ${families.sorted().joinToString(", ")}. Traces from different places together are stronger than one name match; an admin should review them."
+                        "Under $gamePath: ${families.sorted().joinToString(", ")}. Traces from different places together are stronger than one name match; an admin should review them.",
+                        CheatSignal(SignalKind.CORRELATED, key, gamePath.takeLast(80), "independent traces: ${families.sorted().joinToString(", ")}", families.size)
                     )
                 )
             }
@@ -1080,17 +1081,30 @@ object MinecraftScanner {
         val hasCode = x.classCount > 0 || x.hasMeta
         val signatures = if (x.strong.isEmpty()) "" else "Cheat signatures: ${x.strong.joinToString(", ")}. "
         val breakdown = ArchiveXRay.describe(x) + " | Path: " + e.path.takeLast(80) + " | Modified: " + ts(e.modified)
+        // The client's name inside class paths or class strings is code evidence. A name only in metadata, or in a
+        // server plugin (such as a Bukkit anti-cheat that lists cheat names), is not enough to call it a cheat client.
+        val codeEvidence = x.strong.isNotEmpty() && !x.serverPlugin && x.tags.any { it.endsWith("@path") || it.endsWith("@strings") }
+        val signal = if (x.strong.isEmpty()) null else CheatSignal(
+            if (codeEvidence) SignalKind.ARCHIVE_CODE else SignalKind.ARCHIVE_META,
+            x.strong.joinToString("/"), e.path.takeLast(80), x.tags.take(4).joinToString(", ").ifEmpty { "name in archive" }
+        )
         if (disguised) {
             val sure = hasCode || x.strong.isNotEmpty()
             val note = if (sure) "" else "No Java classes or mod metadata inside, so it may be an ordinary data file. "
             sink.flag(
                 "xr:" + e.path,
-                ScanFinding(if (sure) "HIGH" else "WARN", "Hidden Archive With Disguised Extension: ${e.name}", signatures + note + breakdown)
+                ScanFinding(if (sure) "HIGH" else "WARN", "Hidden Archive With Disguised Extension: ${e.name}", signatures + note + breakdown, signal)
             )
         } else if (x.strong.isNotEmpty()) {
+            val note = if (x.serverPlugin) "This is a server plugin, not a client mod, so it is not treated as a cheat client. "
+            else if (!codeEvidence) "The name appears only in the archive's metadata, not in its code. " else ""
             sink.flag(
                 "xr:" + e.path,
-                ScanFinding("HIGH", "Archive contents match cheat client signatures (${x.strong.joinToString(", ")})", signatures + breakdown)
+                ScanFinding(
+                    if (codeEvidence) "HIGH" else "WARN",
+                    "Archive contents match cheat client signatures (${x.strong.joinToString(", ")})",
+                    signatures + note + breakdown, signal
+                )
             )
         } else if (!ArchiveXRay.isWhitelisted(x.ids) && (inMods || x.hasMeta || x.packages.isNotEmpty())) {
             sink.flag("xr:" + e.path, ScanFinding("WARN", "Custom/Unverified Mod \u2014 Contents Extracted", breakdown))
@@ -1142,7 +1156,8 @@ object MinecraftScanner {
             "tx:" + f.path,
             ScanFinding(
                 sev, title,
-                "File: ${f.name} | Matched: $matched | Modified: ${ts(f.modified)} | Path: ${f.path.takeLast(80)} | Snippet: $snippet"
+                "File: ${f.name} | Matched: $matched | Modified: ${ts(f.modified)} | Path: ${f.path.takeLast(80)} | Snippet: $snippet",
+                if (hit.strong.isNotEmpty() && inGame) CheatSignal(SignalKind.CONFIG_TEXT, hit.strong.joinToString("/"), f.path.takeLast(80), "names client in config: $matched".take(120)) else null
             )
         )
     }

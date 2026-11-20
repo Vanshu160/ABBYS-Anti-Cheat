@@ -40,14 +40,14 @@ object ReportClient {
         }
     }
 
-    /** Uploads one report with the session token. May be called any number of times until the session expires. */
-    fun submit(token: String, findings: List<ScanFinding>): Submit {
+    /** Uploads one report (findings plus the verdict computed from them) with the session token. May be called any number of times until the session expires. */
+    fun submit(token: String, findings: List<ScanFinding>, verdict: Verdict): Submit {
         return try {
             val arr = JSONArray()
             findings.forEach {
                 arr.put(JSONObject().put("severity", it.severity).put("title", it.title).put("detail", it.detail))
             }
-            val body = JSONObject().put("report", arr).toString().toByteArray(Charsets.UTF_8)
+            val body = JSONObject().put("report", arr).put("verdict", verdict.toJson()).toString().toByteArray(Charsets.UTF_8)
             val c = open("/api/submit-report", "POST")
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")

@@ -101,6 +101,8 @@ internal class XRay(val fileName: String) {
     val weak = LinkedHashSet<String>()
     val combat = LinkedHashSet<String>()
     var classCount = 0
+    /** A server plugin (plugin.yml and friends), e.g. a Bukkit anti-cheat: its class names mention cheats without being one. */
+    var serverPlugin = false
     var hasMeta = false
     var agent: String? = null
     var nested = 0
@@ -172,6 +174,7 @@ internal object ArchiveXRay {
                     if (e.isDirectory) continue
                     val name = e.name
                     val low = name.lowercase()
+                    if (low == "plugin.yml" || low == "paper-plugin.yml" || low == "bungee.yml" || low == "velocity-plugin.json") x.serverPlugin = true
                     if (low.endsWith(".class")) {
                         x.classCount++
                         if (isStandard(name)) continue

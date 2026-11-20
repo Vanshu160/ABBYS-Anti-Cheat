@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { SessionStore, PLAYER_SESSION_MS, UNCLAIMED_TTL_MS, READ_GRACE_MS } = require("./sessions");
+const { SessionStore, sanitizeVerdict, PLAYER_SESSION_MS, UNCLAIMED_TTL_MS, READ_GRACE_MS } = require("./sessions");
 
 const MIN = 60 * 1000;
 function setup() {
@@ -97,4 +97,35 @@ test("per-IP limit on open PINs", () => {
   for (let i = 0; i < 5; i++) assert.ok(store.create("9.9.9.9", "a").pin);
   assert.equal(store.create("9.9.9.9", "a").error, "too_many");
   assert.ok(store.create("8.8.8.8", "a").pin);
+});
+
+test("verdict is stored with the report, headline derived from level, and shown to the admin", () => {
+  const { store, pin, token } = setup();
+  const s = store.start(pin);
+  const verdict = {
+    level: "CHEAT_DETECTED", headline: "NO CHEAT DETECTED", summary: "s",
+    detections: [{ client: "wurst", file: "mods/a.jar", evidence: "wurst@path", confidence: "HIGH" }],
+    reasons: [], limits: ["l"],
+  };
+  assert.equal(store.submit(s.playerToken, rep(2), verdict).success, true);
+  const r = store.read(pin, token);
+  assert.equal(r.verdict.level, "CHEAT_DETECTED");
+  assert.equal(r.verdict.headline, "CHEAT DETECTED"); // a spoofed headline cannot disagree with the level
+  assert.equal(r.verdict.detections[0].client, "wurst");
+});
+
+test("bad or missing verdicts are dropped, the report still saves; later scan replaces the verdict", () => {
+  const { store, pin, token } = setup();
+  const s = store.start(pin);
+  assert.equal(sanitizeVerdict({ level: "WHATEVER" }), null);
+  assert.equal(sanitizeVerdict("x"), null);
+  assert.equal(store.submit(s.playerToken, rep(1), { level: "nope" }).success, true);
+  assert.equal(store.read(pin, token).verdict, null);
+  store.submit(s.playerToken, rep(1), { level: "SUSPICIOUS_ACTIVITY", detections: "bad", reasons: ["a\u0000b"] });
+  const v = store.read(pin, token).verdict;
+  assert.equal(v.level, "SUSPICIOUS_ACTIVITY");
+  assert.deepEqual(v.detections, []);
+  assert.equal(v.reasons[0], "a b");
+  store.submit(s.playerToken, rep(1), { level: "NO_CHEAT_DETECTED" });
+  assert.equal(store.read(pin, token).verdict.level, "NO_CHEAT_DETECTED");
 });
