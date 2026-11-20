@@ -10,6 +10,17 @@ permissions:
   contents: write
 
 jobs:
+  server-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Server session tests
+        working-directory: server
+        run: npm test
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -25,25 +36,87 @@ jobs:
         with:
           gradle-version: '8.5'
 
+      - name: Unit tests
+        run: gradle testDebugUnitTest
+
       - name: Build Debug APK
         run: gradle assembleDebug
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: MobileScanner-APK
           path: app/build/outputs/apk/debug/app-debug.apk
-          
+
+      # Release signing. The real key lives only in repository secrets (see docs/RELEASE.md).
+      # Pull requests without the secrets sign with a throwaway key so the release pipeline is still exercised.
+      - name: Prepare signing key
+        id: key
+        env:
+          KS_B64: ${{ secrets.ABYSS_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ABYSS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ABYSS_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ABYSS_KEY_PASSWORD }}
+        run: |
+          set -e
+          KS="$RUNNER_TEMP/abyss.jks"
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+            echo "$KS_B64" | base64 -d > "$KS"
+            echo "kind=real" >> "$GITHUB_OUTPUT"
+          else
+            KS_PASS=ephemeral-pass; KEY_PASS=ephemeral-pass; KEY_ALIAS=ephemeral
+            keytool -genkeypair -keystore "$KS" -storepass "$KS_PASS" -keypass "$KEY_PASS" -alias "$KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 2 -dname "CN=CI throwaway"
+            echo "kind=ephemeral" >> "$GITHUB_OUTPUT"
+          fi
+          echo "ABYSS_KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
+          echo "ABYSS_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+          echo "ABYSS_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ABYSS_KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK and bundle
+        run: gradle assembleRelease bundleRelease
+
+      - name: Verify APK signature and manifest
+        id: verify
+        run: |
+          set -e
+          APK=app/build/outputs/apk/release/app-release.apk
+          AS=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          "$AS/apksigner" verify --verbose --print-certs "$APK" | tee verify.txt
+          echo "cert=$(grep -m1 'certificate SHA-256 digest' verify.txt | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
+          "$AS/aapt2" dump badging "$APK" | grep -E "^package:|uses-permission:|launchable-activity" | tee badging.txt
+          grep -q "name='com.example.mobilescanner'" badging.txt
+          sha256sum "$APK" | tee apk.sha256
+
+      - name: Upload release APK and AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: ABYSS-release-${{ steps.key.outputs.kind }}-signed
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
 
       # Direct .apk download (no zip): a rolling "latest" release on every push to main.
       - name: Publish APK to the latest release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
+          KIND: ${{ steps.key.outputs.kind }}
+          CERT: ${{ steps.verify.outputs.cert }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk ABBYS-Anti-Cheat.apk
+          if [ "$KIND" = "real" ]; then
+            SIGN="Signed with the ABYSS release key (certificate SHA-256 $CERT). Updates install over previous builds signed with the same key."
+            ASSET=ABYSS-AntiCheat.apk
+            cp app/build/outputs/apk/release/app-release.apk "$ASSET"
+          else
+            SIGN="NOT signed with a release key: the ABYSS_KEYSTORE_* secrets are not set, so this is the debug-signed build. Once the key is added, the first release-signed build must be installed after uninstalling this one."
+            ASSET=ABYSS-AntiCheat.apk
+            cp app/build/outputs/apk/debug/app-debug.apk "$ASSET"
+          fi
+          SHA=$(sha256sum "$ASSET" | cut -d' ' -f1)
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest ABBYS-Anti-Cheat.apk \
-            --title "ABBYS Anti-Cheat (latest build)" \
-            --notes "Debug-signed APK built from ${GITHUB_SHA::7}. Download the .apk and install it directly." \
+          gh release create latest "$ASSET" \
+            --title "ABYSS AntiCheat (latest build)" \
+            --notes "Build ${GITHUB_SHA::7}, versionCode $GITHUB_RUN_NUMBER. $SIGN File SHA-256: $SHA" \
             --target "$GITHUB_SHA"

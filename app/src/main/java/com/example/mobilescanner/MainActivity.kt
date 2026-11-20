@@ -17,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -31,10 +32,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
@@ -44,23 +48,28 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val BgDark = Color(0xFF0B0B14)
-private val CardDark = Color(0xFF15151F)
-private val HeroDark = Color(0xFF1A1A33)
-private val Accent = Color(0xFF6D5EF0)
-private val AccentSoft = Color(0xFF9D8CFF)
-private val TealSoft = Color(0xFF38BDF8)
+// Deep-ocean palette shared by every screen.
+private val BgDark = Color(0xFF050E1F)
+private val CardDark = Color(0xFF0B1B34)
+private val HeroDark = Color(0xFF0E2747)
+private val BarDark = Color(0xFF081629)
+private val Accent = Color(0xFF19B7E6)
+private val OnAccent = Color(0xFF03111F)
+private val AccentSoft = Color(0xFF7FE9FF)
+private val TealSoft = Color(0xFF19E6D2)
 private val GreenSoft = Color(0xFF34D399)
-private val MutedText = Color(0xFF9AA0B4)
+private val MutedText = Color(0xFF9DB2CC)
+private val ErrorText = Color(0xFFF87171)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = BgDark, surface = CardDark)) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Accent, onPrimary = OnAccent, background = BgDark, surface = CardDark)) {
                 Surface(modifier = Modifier.fillMaxSize(), color = BgDark) {
                     ScannerApp()
                 }
@@ -77,22 +86,47 @@ enum class ScanStep {
     COMPLETED
 }
 
+private fun formatLeft(ms: Long): String {
+    val total = ms / 1000
+    return "%d:%02d".format(total / 60, total % 60)
+}
+
 @Composable
 fun ScannerApp() {
-    var currentStep by remember { mutableStateOf(ScanStep.ENTER_PIN) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val sessions = remember { SessionRepository(EncryptedSessionStorage(context)) }
+    // A session that was started earlier and has not expired is picked up again after a restart.
+    var session by remember { mutableStateOf(sessions.current()) }
+    var currentStep by remember {
+        mutableStateOf(
+            when {
+                session == null -> ScanStep.ENTER_PIN
+                hasUsageStatsPermission(context) && hasAllFilesPermission(context) -> ScanStep.HOME
+                else -> ScanStep.GRANT_PERMISSIONS
+            }
+        )
+    }
     var pinCode by remember { mutableStateOf("") }
     var scanMode by remember { mutableStateOf(ScanMode.FULL) }
     var scanStatusText by remember { mutableStateOf("Initializing...") }
     var scanResults by remember { mutableStateOf<List<ScanFinding>>(emptyList()) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var verifying by remember { mutableStateOf(false) }
     var pinError by remember { mutableStateOf<String?>(null) }
+    var sessionEnded by remember { mutableStateOf(false) }
     var uploadStatus by remember { mutableStateOf("") }
     var permTick by remember { mutableIntStateOf(0) }
     var safTree by remember { mutableStateOf<Uri?>(null) }
 
-    // Re-check permissions every time the player comes back from a settings screen.
+    // Ends the session locally (it is already over, or the server said so).
+    val expireSession = {
+        sessions.end()
+        session = null
+        sessionEnded = true
+        if (currentStep == ScanStep.HOME || currentStep == ScanStep.GRANT_PERMISSIONS) currentStep = ScanStep.ENTER_PIN
+    }
+
+    // Re-check permissions and the session every time the player comes back from another screen or app.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -103,6 +137,23 @@ fun ScannerApp() {
     }
     val usageOk = remember(permTick) { hasUsageStatsPermission(context) }
     val filesOk = remember(permTick) { hasAllFilesPermission(context) }
+    LaunchedEffect(permTick) {
+        if (session != null && sessions.current() == null) expireSession()
+    }
+    // Expire exactly when the 15 minutes are up while the app is open.
+    LaunchedEffect(session) {
+        val s = session ?: return@LaunchedEffect
+        delay(s.remainingMs(System.currentTimeMillis()))
+        if (sessions.current() == null) expireSession()
+    }
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(1000)
+            value = System.currentTimeMillis()
+        }
+    }
+    val leftMs = session?.remainingMs(now)
+
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         safTree = uri
         if (uri != null) {
@@ -113,21 +164,32 @@ fun ScannerApp() {
     val storagePermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permTick++ }
 
     Column(modifier = Modifier.fillMaxSize().background(BgDark)) {
-        Header()
+        Header(leftMs)
         when (currentStep) {
             ScanStep.ENTER_PIN -> PinStep(
                 pinCode = pinCode,
                 onPin = { pinCode = it },
                 verifying = verifying,
                 pinError = pinError,
+                sessionEnded = sessionEnded,
                 onVerify = {
                     verifying = true
                     pinError = null
                     scope.launch {
-                        val ok = withContext(Dispatchers.IO) { ReportClient.verifyPin(pinCode) }
+                        val r = withContext(Dispatchers.IO) { ReportClient.startSession(pinCode) }
                         verifying = false
-                        if (ok) currentStep = ScanStep.GRANT_PERMISSIONS
-                        else pinError = "PIN not accepted. It may be wrong, already used, expired, or the server is unreachable."
+                        when (r) {
+                            is ReportClient.Start.Ok -> {
+                                session = sessions.start(r.token, r.expiresInSeconds)
+                                pinCode = ""
+                                sessionEnded = false
+                                currentStep = ScanStep.GRANT_PERMISSIONS
+                            }
+                            ReportClient.Start.Rejected ->
+                                pinError = "PIN not accepted. It may be wrong, already used or expired."
+                            ReportClient.Start.Unreachable ->
+                                pinError = "Could not reach the server. Check your connection and try again (it may be waking up)."
+                        }
                     }
                 }
             )
@@ -161,12 +223,20 @@ fun ScannerApp() {
                         ScanMode.DELETED -> "Checking trash, hidden folders and Downloads..."
                         ScanMode.BROWSER -> "Checking where downloaded files came from..."
                     }
+                    val token = session?.token
                     val results = withContext(Dispatchers.IO) { CheatScanner.run(context, scanMode, safTree) }
                     scanResults = results
                     scanStatusText = "Sending report to admin..."
-                    val sent = withContext(Dispatchers.IO) { ReportClient.submit(pinCode, results) }
-                    uploadStatus = if (sent) "Report sent to the admin."
-                    else "Could not send the report. Show this screen to the admin."
+                    val sent = if (token == null) ReportClient.Submit.SESSION_EXPIRED
+                    else withContext(Dispatchers.IO) { ReportClient.submit(token, results) }
+                    uploadStatus = when (sent) {
+                        ReportClient.Submit.SENT -> "Report sent to the admin."
+                        ReportClient.Submit.SESSION_EXPIRED -> {
+                            expireSession()
+                            "Session expired. This report was NOT sent. Enter a new PIN to scan again."
+                        }
+                        ReportClient.Submit.FAILED -> "Could not send the report (network or server). Scan again or show this screen to the admin."
+                    }
                     currentStep = ScanStep.COMPLETED
                 }
                 Column(
@@ -174,6 +244,8 @@ fun ScannerApp() {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
+                    AbyssEmblem(96.dp)
+                    Spacer(modifier = Modifier.height(20.dp))
                     Text("Scanning", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(scanStatusText, fontSize = 14.sp, color = MutedText)
@@ -183,15 +255,13 @@ fun ScannerApp() {
             }
 
             ScanStep.COMPLETED -> ResultsStep(
-                pinCode = pinCode,
                 uploadStatus = uploadStatus,
                 results = scanResults,
+                sessionActive = session != null,
                 onNewScan = {
-                    pinCode = ""
-                    pinError = null
-                    uploadStatus = ""
                     safTree = null
-                    currentStep = ScanStep.ENTER_PIN
+                    uploadStatus = ""
+                    currentStep = if (session != null) ScanStep.HOME else ScanStep.ENTER_PIN
                 }
             )
         }
@@ -200,25 +270,28 @@ fun ScannerApp() {
 
 // ---- pieces -----------------------------------------------------------------------------------
 
+/** The one ABYSS emblem: the same two drawables as the launcher icon, used everywhere in the app. */
 @Composable
-private fun Header() {
+fun AbyssEmblem(size: Dp) {
+    Box(modifier = Modifier.size(size).clip(RoundedCornerShape(size * 0.22f))) {
+        Image(painterResource(R.drawable.ic_abyss_background), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        Image(painterResource(R.drawable.ic_abyss_foreground), "ABYSS", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+    }
+}
+
+@Composable
+private fun Header(sessionLeftMs: Long?) {
     Row(
-        modifier = Modifier.fillMaxWidth().background(Color(0xFF11111C)).padding(horizontal = 20.dp, vertical = 18.dp),
+        modifier = Modifier.fillMaxWidth().background(BarDark).padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .background(Brush.linearGradient(listOf(Accent, Color(0xFFD946EF))), RoundedCornerShape(14.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("A", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-        }
+        AbyssEmblem(48.dp)
         Spacer(modifier = Modifier.width(14.dp))
-        Column {
-            Text("ABBYS Anti-Cheat", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text("Minecraft Cheat Scanner", fontSize = 13.sp, color = MutedText)
+        Column(modifier = Modifier.weight(1f)) {
+            Text("ABYSS AntiCheat", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Minecraft Java Forensic Scanner", fontSize = 12.sp, color = MutedText)
         }
+        if (sessionLeftMs != null) Chip("Session ${formatLeft(sessionLeftMs)}", GreenSoft)
     }
 }
 
@@ -266,7 +339,24 @@ private fun ActionCard(emoji: String, color: Color, title: String, subtitle: Str
             Spacer(modifier = Modifier.height(2.dp))
             Text(subtitle, fontSize = 13.sp, color = MutedText)
         }
-        Text("›", fontSize = 26.sp, color = MutedText)
+        Text("\u203A", fontSize = 26.sp, color = MutedText)
+    }
+}
+
+@Composable
+private fun InfoCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().background(CardDark, RoundedCornerShape(20.dp)).padding(18.dp)) {
+        Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(10.dp))
+        content()
+    }
+}
+
+@Composable
+private fun CompatRow(name: String, status: String) {
+    Column(modifier = Modifier.padding(bottom = 8.dp)) {
+        Text(name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(status, fontSize = 12.sp, color = MutedText)
     }
 }
 
@@ -276,27 +366,40 @@ private fun PinStep(
     onPin: (String) -> Unit,
     verifying: Boolean,
     pinError: String?,
+    sessionEnded: Boolean,
     onVerify: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Column(modifier = Modifier.fillMaxWidth().background(HeroDark, RoundedCornerShape(24.dp)).padding(20.dp)) {
-            Text("Enter your session PIN", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text("The admin who is checking your device gives you a 6-digit PIN.", fontSize = 13.sp, color = MutedText)
-            Spacer(modifier = Modifier.height(16.dp))
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().background(HeroDark, RoundedCornerShape(24.dp)).padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            AbyssEmblem(104.dp)
+            Spacer(modifier = Modifier.height(14.dp))
+            Text("ABYSS AntiCheat", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text("Minecraft Java Forensic Scanner", fontSize = 14.sp, fontStyle = FontStyle.Italic, color = AccentSoft)
+            Spacer(modifier = Modifier.height(18.dp))
+            if (sessionEnded) {
+                Text("Your 15-minute session ended. Enter a PIN to start a new one.", fontSize = 13.sp, color = AccentSoft)
+                Spacer(modifier = Modifier.height(10.dp))
+            }
             OutlinedTextField(
                 value = pinCode,
                 onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) onPin(it) },
                 label = { Text("Session PIN") },
+                supportingText = { Text("One PIN covers every scan for 15 minutes") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
             )
             pinError?.let {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(it, color = Color(0xFFF87171), fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(it, color = ErrorText, fontSize = 13.sp)
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Button(
                 onClick = onVerify,
                 enabled = pinCode.length == 6 && !verifying,
@@ -304,13 +407,40 @@ private fun PinStep(
                 colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 modifier = Modifier.fillMaxWidth().height(52.dp)
             ) {
-                Text(if (verifying) "Checking..." else "Verify PIN", color = Color.White)
+                Text(if (verifying) "Checking..." else "Start session", color = OnAccent, fontWeight = FontWeight.Bold)
             }
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        Column(modifier = Modifier.fillMaxWidth().background(CardDark, RoundedCornerShape(20.dp)).padding(18.dp)) {
-            Text("What this scan reads", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            "ABYSS is an independent Minecraft Mobile Java forensic security project designed to investigate suspicious " +
+                "client modifications, analyze launcher files, examine digital traces, and generate evidence-based detection reports.",
+            fontSize = 14.sp,
+            color = MutedText
+        )
+
+        InfoCard("Compatibility") {
+            CompatRow("Zalith Launcher", "Supported in code \u00b7 not yet tested on a device")
+            CompatRow("Mojo Launcher", "Supported in code \u00b7 not yet tested on a device")
+            CompatRow("PojavLauncher", "Supported in code \u00b7 not yet tested on a device")
+            CompatRow("Android 11 and newer", "Scans run, but Android may block Android/data. Folders you pick or that live under /games usually work.")
+            Text("Device-tested launchers: none yet. Planned, unverified: other Pojav forks.", fontSize = 12.sp, color = AccentSoft)
+        }
+
+        InfoCard("Features") {
+            for (f in listOf(
+                "Cheat Client Signature Detection",
+                "Minecraft Log Analysis",
+                "JAR & Mod Inspection",
+                "Launcher File Investigation",
+                "External Storage Scanning",
+                "Evidence-Based Reports",
+                "Suspicious File Analysis"
+            )) {
+                Text("\u2022  $f", fontSize = 14.sp, modifier = Modifier.padding(bottom = 4.dp))
+            }
+        }
+
+        InfoCard("What this scan reads") {
             Text(
                 "Names of installed apps, enabled accessibility services, apps used in the last 15 minutes, whether USB " +
                     "debugging is on, and basic root/debugger indicators. With All Files Access it also lists file and " +
@@ -351,14 +481,14 @@ private fun PermissionStep(
             onClick = onContinue,
             enabled = usageOk && filesOk,
             shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+            colors = ButtonDefaults.buttonColors(containerColor = Accent),
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) {
-            Text("Continue", color = Color.White)
+            Text("Continue", color = OnAccent, fontWeight = FontWeight.Bold)
         }
         if (!(usageOk && filesOk)) {
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Grant both permissions to continue.", fontSize = 12.sp, color = Color(0xFFF87171))
+            Text("Grant both permissions to continue.", fontSize = 12.sp, color = ErrorText)
         }
     }
 }
@@ -397,7 +527,7 @@ private fun HomeStep(onSelectFolder: () -> Unit, onAutoDetect: () -> Unit, onMod
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                     modifier = Modifier.weight(1f).height(52.dp)
                 ) {
-                    Text("📁  Select Folder", color = Color.White, fontSize = 14.sp)
+                    Text("📁  Select Folder", color = OnAccent, fontSize = 14.sp)
                 }
                 OutlinedButton(
                     onClick = onAutoDetect,
@@ -410,7 +540,7 @@ private fun HomeStep(onSelectFolder: () -> Unit, onAutoDetect: () -> Unit, onMod
         }
 
         ActionCard(
-            "🚀", Color(0xFFEC4899), "Full Auto Scan",
+            "🚀", Accent, "Full Auto Scan",
             "Device checks, storage, Minecraft folders, trash and download sources in one go"
         ) { onMode(ScanMode.FULL) }
         ActionCard(
@@ -452,10 +582,10 @@ private fun severityColor(severity: String): Color = when (severity) {
 }
 
 @Composable
-private fun ResultsStep(pinCode: String, uploadStatus: String, results: List<ScanFinding>, onNewScan: () -> Unit) {
+private fun ResultsStep(uploadStatus: String, results: List<ScanFinding>, sessionActive: Boolean, onNewScan: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Scan complete", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GreenSoft)
-        Text("PIN $pinCode. $uploadStatus", fontSize = 12.sp, color = MutedText)
+        Text(uploadStatus, fontSize = 12.sp, color = if (uploadStatus.startsWith("Report sent")) MutedText else ErrorText)
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             for (sev in listOf("HIGH", "WARN", "INFO", "CLEAN")) {
@@ -487,7 +617,7 @@ private fun ResultsStep(pinCode: String, uploadStatus: String, results: List<Sca
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth().height(48.dp)
         ) {
-            Text("New Scan")
+            Text(if (sessionActive) "New Scan" else "Enter new PIN")
         }
     }
 }

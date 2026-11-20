@@ -14,31 +14,52 @@ object Config {
 object ReportClient {
     private const val TIMEOUT_MS = 45_000 // Render free tier can take ~30-50s to wake from sleep
 
-    /** True only if the server says this PIN exists, is unused and has not expired. */
-    fun verifyPin(pin: String): Boolean {
-        if (!pin.matches(Regex("\\d{6}"))) return false
+    sealed class Start {
+        class Ok(val token: String, val expiresInSeconds: Long) : Start()
+        object Rejected : Start() // wrong, used or expired PIN
+        object Unreachable : Start()
+    }
+
+    enum class Submit { SENT, SESSION_EXPIRED, FAILED }
+
+    /** Enters the PIN once. The server starts a 15-minute session and returns a token; the PIN is not needed again. */
+    fun startSession(pin: String): Start {
+        if (!pin.matches(Regex("\\d{6}"))) return Start.Rejected
         return try {
-            val c = open("/api/verify-pin/$pin", "GET")
-            c.responseCode == 200
+            val c = open("/api/start-session/$pin", "POST")
+            when (c.responseCode) {
+                200 -> {
+                    val j = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                    Start.Ok(j.getString("playerToken"), j.getLong("expiresInSeconds"))
+                }
+                404 -> Start.Rejected
+                else -> Start.Unreachable
+            }
         } catch (e: Exception) {
-            false
+            Start.Unreachable
         }
     }
 
-    fun submit(pin: String, findings: List<ScanFinding>): Boolean {
+    /** Uploads one report with the session token. May be called any number of times until the session expires. */
+    fun submit(token: String, findings: List<ScanFinding>): Submit {
         return try {
             val arr = JSONArray()
             findings.forEach {
                 arr.put(JSONObject().put("severity", it.severity).put("title", it.title).put("detail", it.detail))
             }
             val body = JSONObject().put("report", arr).toString().toByteArray(Charsets.UTF_8)
-            val c = open("/api/submit-report/$pin", "POST")
+            val c = open("/api/submit-report", "POST")
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
+            c.setRequestProperty("x-player-token", token)
             c.outputStream.use { it.write(body) }
-            c.responseCode == 200
+            when (c.responseCode) {
+                200 -> Submit.SENT
+                401 -> Submit.SESSION_EXPIRED
+                else -> Submit.FAILED
+            }
         } catch (e: Exception) {
-            false
+            Submit.FAILED
         }
     }
 

@@ -4,8 +4,7 @@ const nameEl = $("adminName"), statusEl = $("statusText");
 const pinEl = $("pinDisplay"), pinWrap = $("pinWrap"), countdownEl = $("countdown");
 const reportBox = $("reportContainer"), reportList = $("reportList"), summaryEl = $("summary");
 const SEVERITIES = ["HIGH", "WARN", "INFO", "CLEAN"];
-const TTL_MS = 30 * 60 * 1000;
-let sessionToken = null, pollTimer = null, tickTimer = null, currentPin = null, report = [], filter = "ALL";
+let lastScans = 0, sessionToken = null, pollTimer = null, tickTimer = null, currentPin = null, report = [], filter = "ALL";
 
 // Only the non-secret name is remembered, and only for this tab. The key is never stored.
 nameEl.value = sessionStorage.getItem("abbys_admin") || "";
@@ -70,11 +69,13 @@ $("copyReport").addEventListener("click", (e) => {
   copy("ABBYS scan, PIN " + currentPin + "\n" + lines.join("\n"), e.target);
 });
 
-function startCountdown(createdAt) {
+let endsAt = 0, claimed = false;
+function startCountdown() {
   clearInterval(tickTimer);
   const tick = () => {
-    const left = Math.max(0, createdAt + TTL_MS - Date.now());
-    countdownEl.textContent = left ? "Expires in " + Math.floor(left / 60000) + ":" + String(Math.floor(left / 1000) % 60).padStart(2, "0") : "Expired";
+    const left = Math.max(0, endsAt - Date.now());
+    const label = claimed ? "Player session ends in " : "PIN expires in ";
+    countdownEl.textContent = left ? label + Math.floor(left / 60000) + ":" + String(Math.floor(left / 1000) % 60).padStart(2, "0") : "Expired";
     if (!left) clearInterval(tickTimer);
   };
   tick();
@@ -94,24 +95,35 @@ $("genBtn").addEventListener("click", async () => {
     const res = await fetch("/api/create-pin", { method: "POST", headers: headers(), body: JSON.stringify({ admin }) });
     if (res.status === 429) { statusEl.textContent = "Too many requests. Wait a minute and retry."; return; }
     if (!res.ok) { statusEl.textContent = "Server error (" + res.status + ")."; return; }
-    const { pin, token } = await res.json();
+    const { pin, token, expiresInSeconds } = await res.json();
+    lastScans = 0;
+    claimed = false;
+    endsAt = Date.now() + expiresInSeconds * 1000;
     sessionToken = token; // held in memory only; needed to read this PIN's report
     currentPin = pin;
     pinEl.textContent = pin;
     pinWrap.classList.remove("hidden");
-    startCountdown(Date.now());
+    startCountdown();
     statusEl.textContent = "Waiting for the player to enter the PIN in the app...";
     pollTimer = setInterval(async () => {
       try {
         const r = await fetch("/api/session/" + pin, { headers: headers() });
-        if (r.status === 404) { stopTimers(); statusEl.textContent = "PIN expired."; return; }
+        if (r.status === 404) { stopTimers(); statusEl.textContent = "Session ended."; return; }
         if (!r.ok) return;
         const s = await r.json();
-        if (s.status === "COMPLETED" && Array.isArray(s.report)) {
+        // Use the server's "seconds left" so a wrong clock on this computer cannot skew the countdown.
+        claimed = s.claimed;
+        endsAt = Date.now() + s.secondsLeft * 1000;
+        if (s.expired) {
           stopTimers();
-          countdownEl.textContent = "Used";
-          statusEl.textContent = "Scan completed.";
-          $("reportPin").textContent = "PIN " + pin;
+          countdownEl.textContent = "Player session ended";
+          statusEl.textContent = s.scans ? "Session ended. Showing the last of " + s.scans + " scan(s)." : "PIN expired without a scan.";
+        } else if (s.claimed) {
+          statusEl.textContent = s.scans ? "Player connected. " + s.scans + " scan(s) received; showing the latest." : "Player connected. Waiting for a scan...";
+        }
+        if (s.status === "COMPLETED" && Array.isArray(s.report) && s.scans !== lastScans) {
+          lastScans = s.scans;
+          $("reportPin").textContent = "PIN " + pin + " \u00b7 scan " + s.scans;
           report = s.report;
           filter = "ALL";
           document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.f === "ALL"));
