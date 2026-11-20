@@ -42,6 +42,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -415,6 +416,27 @@ private fun PinStep(
             ) {
                 Text(if (verifying) "Checking..." else "Start session", color = OnAccent, fontWeight = FontWeight.Bold)
             }
+            Spacer(modifier = Modifier.height(14.dp))
+            val ctx = LocalContext.current
+            val siteUrl = Config.SERVER_URL + "/"
+            Text("Don't have a code from an admin? Want to test it yourself? Get a code at:", fontSize = 13.sp, color = MutedText)
+            Text(
+                siteUrl,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AccentSoft,
+                textDecoration = TextDecoration.Underline,
+                modifier = Modifier
+                    .clickable {
+                        try {
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(siteUrl)))
+                        } catch (e: Exception) {
+                            // no browser available: the address stays visible so it can be typed in
+                        }
+                    }
+                    .padding(vertical = 6.dp)
+            )
+            Text("Open it, tap Generate PIN, then type the 6-digit code above.", fontSize = 12.sp, color = MutedText)
         }
 
         Text(
