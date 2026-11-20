@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Abyss" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/abyss_navy</item>
+        <item name="android:statusBarColor">@color/abyss_navy</item>
+        <item name="android:navigationBarColor">@color/abyss_navy</item>
+        <item name="android:windowSplashScreenBackground">@color/abyss_navy</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_abyss_foreground</item>
+    </style>
+</resources>
