@@ -12,7 +12,7 @@ const SEVERITIES = new Set(["HIGH", "WARN", "INFO", "CLEAN"]);
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", Number(process.env.TRUST_PROXY || 0));
-app.use(express.json({ limit: "256kb" }));
+app.use(express.json({ limit: "1mb" }));
 
 // The dashboard is static files only and runs under a strict CSP, so even if a malicious report
 // slipped through sanitising it still could not execute script in the admin's browser.
@@ -87,8 +87,8 @@ function sanitizeReport(report) {
     const sev = item && typeof item.severity === "string" ? item.severity.toUpperCase() : "INFO";
     return {
       severity: SEVERITIES.has(sev) ? sev : "INFO",
-      title: clean(item && item.title, 120),
-      detail: clean(item && item.detail, 500),
+      title: clean(item && item.title, 160),
+      detail: clean(item && item.detail, 1400),
     };
   });
 }
