@@ -18,7 +18,9 @@ enum class ScanMode { FULL, MINECRAFT, DELETED, BROWSER }
 data class ScanFinding(
     val severity: String,
     val title: String,
-    val detail: String
+    val detail: String,
+    /** Set only on findings that are real cheat-client evidence; the verdict is computed from these, not from severity. */
+    val signal: CheatSignal? = null
 )
 
 /**
@@ -72,7 +74,8 @@ object CheatScanner {
     private fun capFindings(all: List<ScanFinding>, max: Int = 190): List<ScanFinding> {
         if (all.size <= max) return all
         val order = listOf("HIGH", "WARN", "INFO", "CLEAN")
-        val sorted = all.sortedBy { val i = order.indexOf(it.severity); if (i < 0) 2 else i }
+        // Findings that feed the verdict are never the ones dropped.
+        val sorted = all.sortedBy { if (it.signal != null) -1 else { val i = order.indexOf(it.severity); if (i < 0) 2 else i } }
         val kept = sorted.take(max - 1)
         return kept + ScanFinding("INFO", "Report truncated", "${all.size - kept.size} lower-priority findings were omitted to fit the report limit.")
     }

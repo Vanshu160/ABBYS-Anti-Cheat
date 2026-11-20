@@ -19,6 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -111,6 +112,7 @@ fun ScannerApp() {
     var scanMode by remember { mutableStateOf(ScanMode.FULL) }
     var scanStatusText by remember { mutableStateOf("Initializing...") }
     var scanResults by remember { mutableStateOf<List<ScanFinding>>(emptyList()) }
+    var verdict by remember { mutableStateOf<Verdict?>(null) }
     var verifying by remember { mutableStateOf(false) }
     var pinError by remember { mutableStateOf<String?>(null) }
     var sessionEnded by remember { mutableStateOf(false) }
@@ -226,9 +228,12 @@ fun ScannerApp() {
                     val token = session?.token
                     val results = withContext(Dispatchers.IO) { CheatScanner.run(context, scanMode, safTree) }
                     scanResults = results
+                    // One verdict, computed once from the evidence; the screen, the report and the admin view all use it.
+                    val v = VerdictEngine.evaluate(results)
+                    verdict = v
                     scanStatusText = "Sending report to admin..."
                     val sent = if (token == null) ReportClient.Submit.SESSION_EXPIRED
-                    else withContext(Dispatchers.IO) { ReportClient.submit(token, results) }
+                    else withContext(Dispatchers.IO) { ReportClient.submit(token, listOf(v.asFinding()) + results, v) }
                     uploadStatus = when (sent) {
                         ReportClient.Submit.SENT -> "Report sent to the admin."
                         ReportClient.Submit.SESSION_EXPIRED -> {
@@ -255,6 +260,7 @@ fun ScannerApp() {
             }
 
             ScanStep.COMPLETED -> ResultsStep(
+                verdict = verdict,
                 uploadStatus = uploadStatus,
                 results = scanResults,
                 sessionActive = session != null,
@@ -574,6 +580,42 @@ private fun HomeStep(onSelectFolder: () -> Unit, onAutoDetect: () -> Unit, onMod
     }
 }
 
+/** The final verdict, shown above the findings. Red only for CHEAT DETECTED. */
+@Composable
+private fun VerdictBanner(v: Verdict) {
+    val color = when (v.level) {
+        VerdictLevel.CHEAT_DETECTED -> Color(0xFFEF4444)
+        VerdictLevel.SUSPICIOUS_ACTIVITY -> Color(0xFFF59E0B)
+        VerdictLevel.NO_CHEAT_DETECTED -> TealSoft
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(color.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
+            .border(BorderStroke(2.dp, color), RoundedCornerShape(18.dp))
+            .padding(16.dp)
+    ) {
+        Text(v.headline, color = color, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(v.summary, fontSize = 13.sp)
+        for (d in v.detections) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Column(modifier = Modifier.fillMaxWidth().background(BgDark.copy(alpha = 0.6f), RoundedCornerShape(12.dp)).padding(10.dp)) {
+                Text("Client: ${d.client}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("File: ${d.file}", fontSize = 12.sp, color = MutedText)
+                Text("Evidence: ${d.evidence}", fontSize = 12.sp, color = MutedText)
+                Text("Confidence: ${d.confidence}", fontSize = 12.sp, color = color, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        for (r in v.reasons) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("\u2022 $r", fontSize = 12.sp, color = MutedText)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        for (l in v.limits) Text("Limit: $l", fontSize = 11.sp, color = MutedText)
+    }
+}
+
 private fun severityColor(severity: String): Color = when (severity) {
     "HIGH" -> Color(0xFFEF4444)
     "WARN" -> Color(0xFFF59E0B)
@@ -582,9 +624,8 @@ private fun severityColor(severity: String): Color = when (severity) {
 }
 
 @Composable
-private fun ResultsStep(uploadStatus: String, results: List<ScanFinding>, sessionActive: Boolean, onNewScan: () -> Unit) {
+private fun ResultsStep(verdict: Verdict?, uploadStatus: String, results: List<ScanFinding>, sessionActive: Boolean, onNewScan: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Scan complete", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GreenSoft)
         Text(uploadStatus, fontSize = 12.sp, color = if (uploadStatus.startsWith("Report sent")) MutedText else ErrorText)
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
@@ -597,6 +638,7 @@ private fun ResultsStep(uploadStatus: String, results: List<ScanFinding>, sessio
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (verdict != null) item { VerdictBanner(verdict) }
             items(results) { item ->
                 val c = severityColor(item.severity)
                 Column(

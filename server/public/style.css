@@ -34,3 +34,12 @@ button.ghost { width: auto; padding: 8px 14px; background: #1e293b; color: #cbd5
 .chip.active { background: #0284c7; color: #fff; }
 .finding.INFO { border-left-color: #38bdf8; }
 @media (max-width: 480px) { .pin-box { font-size: 28px; letter-spacing: 5px; } }
+
+.verdict { border: 2px solid #38bdf8; background: rgba(56,189,248,.1); border-radius: 12px; padding: 14px 16px; margin: 10px 0 14px; }
+.verdict.CHEAT_DETECTED { border-color: #ef4444; background: rgba(239,68,68,.14); }
+.verdict.SUSPICIOUS_ACTIVITY { border-color: #f59e0b; background: rgba(245,158,11,.14); }
+.verdict.NO_CHEAT_DETECTED { border-color: #14b8a6; background: rgba(20,184,166,.12); }
+.verdict h2 { margin: 0 0 6px; font-size: 26px; letter-spacing: .5px; }
+.verdict.CHEAT_DETECTED h2 { color: #ef4444; } .verdict.SUSPICIOUS_ACTIVITY h2 { color: #f59e0b; } .verdict.NO_CHEAT_DETECTED h2 { color: #14b8a6; }
+.verdict .det { background: #090d16; border-radius: 8px; padding: 8px 10px; margin-top: 8px; font-size: 13px; }
+.verdict .small { font-size: 12px; opacity: .8; margin-top: 4px; }

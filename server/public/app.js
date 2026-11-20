@@ -2,9 +2,9 @@
 const $ = (id) => document.getElementById(id);
 const nameEl = $("adminName"), statusEl = $("statusText");
 const pinEl = $("pinDisplay"), pinWrap = $("pinWrap"), countdownEl = $("countdown");
-const reportBox = $("reportContainer"), reportList = $("reportList"), summaryEl = $("summary");
+const verdictBox = $("verdictBox"), reportBox = $("reportContainer"), reportList = $("reportList"), summaryEl = $("summary");
 const SEVERITIES = ["HIGH", "WARN", "INFO", "CLEAN"];
-let lastScans = 0, sessionToken = null, pollTimer = null, tickTimer = null, currentPin = null, report = [], filter = "ALL";
+let verdict = null, lastScans = 0, sessionToken = null, pollTimer = null, tickTimer = null, currentPin = null, report = [], filter = "ALL";
 
 // Only the non-secret name is remembered, and only for this tab. The key is never stored.
 nameEl.value = sessionStorage.getItem("abbys_admin") || "";
@@ -12,6 +12,35 @@ nameEl.value = sessionStorage.getItem("abbys_admin") || "";
 const headers = () => ({ "Content-Type": "application/json", "x-session-token": sessionToken || "" });
 const sevOf = (i) => (SEVERITIES.includes(i.severity) ? i.severity : "INFO");
 const stopTimers = () => { clearInterval(pollTimer); clearInterval(tickTimer); };
+
+function renderVerdict() {
+  verdictBox.replaceChildren();
+  if (!verdict) { verdictBox.className = "verdict hidden"; return; }
+  verdictBox.className = "verdict " + verdict.level;
+  const h = document.createElement("h2");
+  h.textContent = verdict.headline;
+  const p = document.createElement("div");
+  p.textContent = verdict.summary;
+  verdictBox.append(h, p);
+  for (const d of verdict.detections) {
+    const box = document.createElement("div");
+    box.className = "det";
+    box.textContent = "Client: " + d.client + " | File: " + d.file + " | Evidence: " + d.evidence + " | Confidence: " + d.confidence;
+    verdictBox.appendChild(box);
+  }
+  for (const r of verdict.reasons) {
+    const el = document.createElement("div");
+    el.className = "small";
+    el.textContent = "\u2022 " + r;
+    verdictBox.appendChild(el);
+  }
+  for (const l of verdict.limits) {
+    const el = document.createElement("div");
+    el.className = "small";
+    el.textContent = "Limit: " + l;
+    verdictBox.appendChild(el);
+  }
+}
 
 function render() {
   summaryEl.replaceChildren();
@@ -125,6 +154,9 @@ $("genBtn").addEventListener("click", async () => {
           lastScans = s.scans;
           $("reportPin").textContent = "PIN " + pin + " \u00b7 scan " + s.scans;
           report = s.report;
+          verdict = s.verdict;
+          renderVerdict();
+          if (verdict) statusEl.textContent = verdict.headline + " (scan " + s.scans + ")";
           filter = "ALL";
           document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.f === "ALL"));
           render();
