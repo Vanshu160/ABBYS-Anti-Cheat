@@ -14,7 +14,6 @@ import java.nio.file.Files
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.zip.ZipFile
 
 /** Where findings go; implemented by the storage scanner and by this module. */
 internal interface FindingSink {
@@ -30,6 +29,10 @@ internal interface McEntry {
     val size: Long
     fun children(): List<McEntry>?
     fun readTail(maxBytes: Int): ByteArray?
+    fun readHead(maxBytes: Int): ByteArray?
+
+    /** Runs [block] on a real file with this entry's bytes (a temporary copy for picked folders, deleted afterwards). */
+    fun <T> withFile(block: (File) -> T): T?
     fun asFile(): File?
 }
 
@@ -74,7 +77,32 @@ private class FileEntry(private val f: File) : McEntry {
         null
     }
 
+    override fun readHead(maxBytes: Int): ByteArray? = try {
+        RandomAccessFile(f, "r").use { raf ->
+            val b = ByteArray(maxBytes)
+            val n = raf.read(b)
+            if (n <= 0) ByteArray(0) else b.copyOf(n)
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    override fun <T> withFile(block: (File) -> T): T? = try {
+        block(f)
+    } catch (e: Exception) {
+        null
+    }
+
     override fun asFile(): File? = f
+}
+
+/** Limits how many bytes of picked-folder files may be copied to temporary files in one scan. */
+private class CopyBudget(var left: Long) {
+    fun take(n: Long): Boolean {
+        if (left < n) return false
+        left -= n
+        return true
+    }
 }
 
 private class SafEntry(
@@ -85,7 +113,9 @@ private class SafEntry(
     override val isDir: Boolean,
     override val modified: Long,
     override val size: Long,
-    override val path: String
+    override val path: String,
+    private val cacheDir: File,
+    private val copyBudget: CopyBudget
 ) : McEntry {
     private var loaded = false
     private var kids: List<McEntry>? = null
@@ -124,7 +154,7 @@ private class SafEntry(
                 val dir = c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
                 val mod = if (c.isNull(3)) 0L else c.getLong(3)
                 val sz = if (c.isNull(4)) 0L else c.getLong(4)
-                out.add(SafEntry(context, tree, id, n, dir, mod, sz, "$path/$n"))
+                out.add(SafEntry(context, tree, id, n, dir, mod, sz, "$path/$n", cacheDir, copyBudget))
             }
         }
         return out
@@ -153,6 +183,45 @@ private class SafEntry(
         null
     }
 
+    override fun readHead(maxBytes: Int): ByteArray? = try {
+        val uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+        context.contentResolver.openInputStream(uri)?.use { ins ->
+            val b = ByteArray(maxBytes)
+            var n = 0
+            while (n < maxBytes) {
+                val r = ins.read(b, n, maxBytes - n)
+                if (r < 0) break
+                n += r
+            }
+            b.copyOf(n)
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    override fun <T> withFile(block: (File) -> T): T? {
+        if (isDir || size <= 0L || size > 150L * 1024 * 1024 || !copyBudget.take(size)) return null
+        val tmp = try {
+            File.createTempFile("mcx", ".bin", cacheDir)
+        } catch (e: Exception) {
+            return null
+        }
+        return try {
+            val uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+            val ins = context.contentResolver.openInputStream(uri)
+            if (ins == null) {
+                null
+            } else {
+                ins.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+                block(tmp)
+            }
+        } catch (e: Exception) {
+            null
+        } finally {
+            tmp.delete()
+        }
+    }
+
     override fun asFile(): File? = null
 }
 
@@ -170,15 +239,17 @@ object MinecraftScanner {
     private const val MAX_FS_DEPTH = 5
     private const val MAX_SAF_DEPTH = 4
     private const val MAX_DIR_VISITS = 4000
-    private const val TIME_BUDGET_MS = 60_000L
+    private const val TIME_BUDGET_MS = 150_000L
+    private const val ARCHIVE_MS = 4_000L
+    private const val MAX_ARCHIVE_BYTES = 300L * 1024 * 1024
+    private const val MAX_HIDDEN_FILES = 6000
+    private const val MAX_TEXT_BYTES = 512 * 1024
     private const val MAX_FLAGS = 150
     private const val MAX_HIGH = 30
     private const val LOG_LINES = 800
     private const val LOG_BYTES = 512 * 1024
     private const val RECENT_MS = 7L * 24 * 3600 * 1000
     private const val MAX_RECENT_LOGS = 4
-    private const val MAX_JAR_ENTRIES = 20_000
-    private const val MAX_JAR_BYTES = 300L * 1024 * 1024
     private const val MAX_DOWNLOAD_FLAGS = 40
 
     private val JAVA_LAUNCHERS = linkedMapOf(
@@ -242,14 +313,20 @@ object MinecraftScanner {
         return null
     }
 
-    /** Class-path prefixes inside a jar that belong to well-known cheat clients. */
-    private val CLASS_MARKERS = listOf(
-        Triple("net/ccbluex/liquidbounce", "liquidbounce", "LiquidBounce"),
-        Triple("net/wurstclient", "wurst", "Wurst"),
-        Triple("meteordevelopment/meteorclient", "meteor", "Meteor Client"),
-        Triple("org/bleachhack", "bleachhack", "BleachHack"),
-        Triple("me/ionar/salhack", "salhack", "SalHack"),
-        Triple("org/kamiblue", "kamiblue", "KAMI Blue")
+    /** Archives that are expected to be ZIP files and are always opened. */
+    private val INSPECT_EXT = setOf("jar", "zip", "mcpack", "mcaddon", "mcworld", "mctemplate", "mrpack", "litemod", "disabled")
+
+    /** Other file types that are ZIP files by design; not reported as disguised. */
+    private val ZIP_OK_EXT = setOf("apk", "xapk", "apks", "aar", "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "cbz", "kmz", "obb")
+    private val TEXT_EXT = setOf("json", "toml", "cfg", "yml", "yaml", "txt", "properties", "conf", "ini", "json5")
+    private val SKIP_DIRS = setOf("assets", "saves", "runtime", "cache", "crash-reports", "screenshots", "libraries", ".fabric", "minecraftworlds")
+
+    private val LAUNCHER_ROWS = listOf(
+        Triple("PojavLauncher", listOf("net.kdt.pojavlaunch", "net.kdt.pojavlaunch.debug"), "pojav"),
+        Triple("MojoLauncher", listOf("git.artdeell.mojo", "com.mojo.launcher"), "mojo"),
+        Triple("Zalith Launcher", listOf("com.movtery.zalithlauncher"), "zalith"),
+        Triple("Fold Craft Launcher (FCL)", listOf("com.tungsten.fcl"), "fcl"),
+        Triple("Minecraft Bedrock (MCPE)", listOf("com.mojang.minecraftpe"), "mojang")
     )
 
     /** Text found inside a version .json that belongs to a cheat client. */
@@ -266,7 +343,10 @@ object MinecraftScanner {
         "bleachhack" to "bleachhack", "rusherhack" to "rusherhack", "aristois" to "aristois",
         "thunderhack" to "thunderhack", "mathax" to "mathax", "doomsday client" to "doomsday",
         "impact client" to "impact", "future client" to "future", "baritone" to "baritone",
-        "killaura" to "killaura", "triggerbot" to "triggerbot", "freecam" to "freecam", "xray" to "xray"
+        "killaura" to "killaura", "triggerbot" to "triggerbot", "freecam" to "freecam", "xray" to "xray",
+        "automace" to "automace", "auto-mace" to "automace", "auto mace" to "automace", "maceswap" to "maceswap",
+        "vapev4" to "vape", "vape v4" to "vape", "vapelite" to "vape", "vape lite" to "vape", "vape client" to "vape",
+        "manthe" to "manthe"
     )
 
     /** Common allowed mods, listed separately so an admin can check them against server rules. */
@@ -310,6 +390,9 @@ object MinecraftScanner {
     }
 
     private class Run(val sink: McSink, val deadline: Long) {
+        val inflate = InflateBudget(768L * 1024 * 1024)
+        val copy = CopyBudget(400L * 1024 * 1024)
+        val xrayed = HashSet<String>()
         var visits = 0
         var javaDirs = 0
         var bedrockDirs = 0
@@ -345,19 +428,23 @@ object MinecraftScanner {
         val installed = packageChecks(context, sink)
 
         val fsOk = hasAllFilesPermission(context)
+        val dataState = HashMap<String, String>()
         if (fsOk) {
             val base = storageBase()
             val candidates = LinkedHashMap<String, File>()
             val add = { f: File -> if (f.isDirectory) candidates.putIfAbsent(canon(f), f) }
 
             for ((pkg, label) in JAVA_LAUNCHERS) {
-                if (pkg in installed) probeData(File(base, "Android/data/$pkg/files"), pkg, label, sink, add)
+                if (pkg in installed) {
+                    dataState[pkg] = if (probeData(File(base, "Android/data/$pkg/files"), pkg, label, sink, add)) "READABLE" else "LOCKED by Android scoped storage"
+                }
             }
             if (BEDROCK_PKG in installed) {
-                probeData(
+                val ok = probeData(
                     File(base, "Android/data/$BEDROCK_PKG/files/games/com.mojang"),
                     BEDROCK_PKG, "Minecraft Bedrock", sink, add
                 )
+                dataState[BEDROCK_PKG] = if (ok) "READABLE" else "LOCKED by Android scoped storage"
             }
             File(base, "games").listFiles()?.filter { it.isDirectory }?.forEach { add(it) }
             add(File(base, "games/com.mojang"))
@@ -368,7 +455,7 @@ object MinecraftScanner {
                 if (run.expired()) break
                 locate(FileEntry(d), 0, MAX_FS_DEPTH, run)
             }
-            downloads(sink)
+            downloads(run)
         }
 
         if (safTree != null) scanTree(context, safTree, run)
@@ -379,6 +466,16 @@ object MinecraftScanner {
         if (sink.overflow > 0) {
             out.add(ScanFinding("INFO", "More Minecraft findings omitted", "${sink.overflow} further matches were left out to keep the report a reasonable size."))
         }
+        val rows = LAUNCHER_ROWS.map { (label, pkgs, keyword) ->
+            val here = pkgs.filter { it in installed }
+            val state = if (here.isEmpty()) "n/a" else here.joinToString(", ") { dataState[it] ?: "not checked (All Files Access missing)" }
+            val n = run.analyzed.count { path -> pkgs.any { path.contains(it) } || path.lowercase().contains(keyword) }
+            "$label: " + (if (here.isEmpty()) "not installed" else "installed") + " | Android/data: $state | folders analyzed: $n"
+        }
+        out.add(ScanFinding("INFO", "Launcher scan status", rows.joinToString(" ; ")))
+        run.analyzed.chunked(4).take(4).forEachIndexed { i, g ->
+            out.add(ScanFinding("INFO", "Minecraft folders scanned (${i + 1})", g.joinToString(" ; ") { it.takeLast(110) }))
+        }
         val where = run.analyzed.take(4).joinToString("; ") { it.takeLast(70) }
         out.add(
             ScanFinding(
@@ -387,7 +484,7 @@ object MinecraftScanner {
                     (if (where.isNotEmpty()) " ($where)" else "") + ". " +
                     (if (!fsOk) "All Files Access is missing, so internal folders were skipped. " else "") +
                     (if (run.expired()) "Stopped early (time or folder limit). " else "") +
-                    "Mod archives from a picked folder are checked by name only. Other apps' private folders stay hidden by Android unless picked."
+                    "Archives and text files are read by content, whatever they are named. Other apps' private folders stay hidden by Android unless picked."
             )
         )
         return out
@@ -444,7 +541,8 @@ object MinecraftScanner {
         null
     }
 
-    private fun probeData(dir: File, pkg: String, label: String, sink: FindingSink, add: (File) -> Any?) {
+    /** True when the folder can be listed; otherwise warns that Android's scoped storage hides it. */
+    private fun probeData(dir: File, pkg: String, label: String, sink: FindingSink, add: (File) -> Any?): Boolean {
         val kids = try {
             dir.listFiles()
         } catch (e: SecurityException) {
@@ -452,15 +550,16 @@ object MinecraftScanner {
         }
         if (kids != null) {
             add(dir)
-        } else {
-            sink.flag(
-                "pd:$pkg",
-                ScanFinding(
-                    "INFO", "$label data folder not readable",
-                    "Android protects Android/data/$pkg on this device, so it was not inspected. Pick it with the folder button if Android allows it; folders under /games are still scanned."
-                )
-            )
+            return true
         }
+        sink.flag(
+            "pd:$pkg",
+            ScanFinding(
+                "WARN", "$label is installed but its Android/data folder is locked",
+                "Android scoped storage hides Android/data/$pkg on this device, so its mods, configs and logs were NOT inspected. Use button 3 (Select Launcher / Minecraft Folder) if Android allows it; folders under /games are still scanned."
+            )
+        )
+        return false
     }
 
     // ---- folder discovery ---------------------------------------------------------------------
@@ -505,7 +604,7 @@ object MinecraftScanner {
         }
         // A folder on internal storage gets the same path as the real file system, so it is not analyzed twice.
         val label = if (rootId.startsWith("primary:")) File(storageBase(), rootId.removePrefix("primary:")).path else rootId
-        val root = SafEntry(context, tree, rootId, label.substringAfterLast('/'), true, 0L, 0L, label)
+        val root = SafEntry(context, tree, rootId, label.substringAfterLast('/'), true, 0L, 0L, label, context.cacheDir, run.copy)
         val before = run.analyzed.size
         locate(root, 0, MAX_SAF_DEPTH, run)
         if (run.analyzed.size == before) {
@@ -562,7 +661,7 @@ object MinecraftScanner {
                     )
                 }
             }
-            j.asFile()?.let { inspectJar(it, sink, ev, modKeys) }
+            xrayArchive(j, true, false, run, ev, modKeys)
             if (hit == null) {
                 val disp = j.name.removeSuffix(".disabled").removeSuffix(".jar")
                 if (KNOWN_OK.any { disp.lowercase().contains(it) }) known.add(disp) else others.add(disp)
@@ -621,11 +720,14 @@ object MinecraftScanner {
                             }
                         }
                     } else if (lowerName.endsWith(".jar")) {
-                        f.asFile()?.let { inspectJar(it, sink, ev, modKeys) }
+                        xrayArchive(f, false, false, run, ev, modKeys)
                     }
                 }
             }
         }
+
+        // Every file in the game folder is checked by content, whatever its name or extension
+        scanHidden(game, run, ev, modKeys)
 
         // Leftover configs of deleted clients
         sub(kids, "config")?.children()?.forEach { c ->
@@ -641,6 +743,8 @@ object MinecraftScanner {
                 )
             }
         }
+
+        sub(kids, "config")?.let { scanConfigText(it, run, ev) }
 
         // Resource packs
         sub(kids, "resourcepacks")?.children()?.forEach { p ->
@@ -683,36 +787,6 @@ object MinecraftScanner {
         }
     }
 
-    /** Reads only the archive's file list (never inflates entries), so zip bombs cannot hurt. */
-    private fun inspectJar(jar: File, sink: FindingSink, ev: Evidence, modKeys: MutableSet<String>) {
-        if (jar.length() > MAX_JAR_BYTES) return
-        try {
-            ZipFile(jar).use { zip ->
-                var n = 0
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    if (++n > MAX_JAR_ENTRIES) return@use
-                    val entry = entries.nextElement().name.lowercase()
-                    val hit = CLASS_MARKERS.firstOrNull { entry.startsWith(it.first) }
-                    if (hit != null) {
-                        modKeys.add(hit.second)
-                        ev.add(hit.second, "ARTIFACT")
-                        sink.flag(
-                            "jh:" + jar.path,
-                            ScanFinding(
-                                "HIGH", "Archive contains a known cheat client's code",
-                                "${jar.path} (modified ${ts(jar.lastModified())}) contains classes under \"${hit.first}\" (${hit.third}). Based on the archive's contents, not just its name; an admin should confirm."
-                            )
-                        )
-                        return@use
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            // not a readable archive: nothing to add
-        }
-    }
-
     private fun scanLog(log: McEntry, gamePath: String, sink: FindingSink, ev: Evidence) {
         val bytes = log.readTail(LOG_BYTES) ?: return
         val lines = String(bytes, Charsets.UTF_8).split('\n').takeLast(LOG_LINES)
@@ -732,7 +806,10 @@ object MinecraftScanner {
                     )
                 )
             }
-            val marker = LOG_MARKERS.firstOrNull { lower.contains(it.first) } ?: continue
+            val markerHit = LOG_MARKERS.firstOrNull { lower.contains(it.first) }
+            val markerKey = markerHit?.second ?: Terms.matchStrong(if (line.length > 400) line.substring(0, 400) else line)
+            if (markerKey == null) continue
+            val marker = Pair(markerHit?.first ?: markerKey, markerKey)
             val isMixin = lower.contains("mixin")
             ev.add(marker.second, "LOG")
             val kind = if (isMixin) "mixin" else "mention"
@@ -882,49 +959,180 @@ object MinecraftScanner {
 
     // ---- Downloads ----------------------------------------------------------------------------
 
-    private fun downloads(sink: FindingSink) {
+    private fun downloads(run: Run) {
         @Suppress("DEPRECATION")
         val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val stack = ArrayDeque<Pair<File, Int>>()
-        stack.addLast(Pair(dir, 0))
+        val sink = run.sink
+        val ev = Evidence()
+        val modKeys = HashSet<String>()
+        val stack = ArrayDeque<Pair<McEntry, Int>>()
+        stack.addLast(Pair(FileEntry(dir), 0))
         var count = 0
         var overflow = 0
+        var files = 0
         while (stack.isNotEmpty()) {
+            if (run.expired()) return
             val (d, depth) = stack.removeLast()
-            val kids = try {
-                d.listFiles()
-            } catch (e: SecurityException) {
-                null
-            }
-            if (kids == null) continue
+            val kids = d.children() ?: continue
             for (f in kids) {
-                if (isLink(f)) continue
-                if (f.isDirectory) {
+                if (f.isDir) {
                     if (depth < 3) stack.addLast(Pair(f, depth + 1))
                     continue
                 }
+                if (++files > MAX_HIDDEN_FILES) return
                 val ext = f.name.substringAfterLast('.', "").lowercase()
-                if (ext !in DOWNLOAD_EXT) continue
-                count++
-                if (count > MAX_DOWNLOAD_FLAGS) {
-                    overflow++
-                    continue
+                if (ext in DOWNLOAD_EXT) {
+                    count++
+                    if (count > MAX_DOWNLOAD_FLAGS) {
+                        overflow++
+                    } else {
+                        val hit = hackMatch(f.name)
+                        val warn = ext == "so" || ext == "lua" || (hit != null && hit.strong)
+                        sink.flag(
+                            "dl:" + f.path,
+                            ScanFinding(
+                                if (warn) "WARN" else "INFO", "File in Downloads: .$ext",
+                                "${f.path} modified ${ts(f.modified)}, ${f.size / 1024} KB." +
+                                    (if (hit != null) " Name matched \"${hit.term}\" (name match only)." else "") +
+                                    (if (ext == "so" || ext == "lua") " Native or script files here are unusual; not proof by itself." else "")
+                            )
+                        )
+                    }
                 }
-                val hit = hackMatch(f.name)
-                val warn = ext == "so" || ext == "lua" || (hit != null && hit.strong)
-                sink.flag(
-                    "dl:" + f.path,
-                    ScanFinding(
-                        if (warn) "WARN" else "INFO", "File in Downloads: .$ext",
-                        "${f.path} modified ${ts(f.lastModified())}, ${f.length() / 1024} KB." +
-                            (if (hit != null) " Name matched \"${hit.term}\" (name match only)." else "") +
-                            (if (ext == "so" || ext == "lua") " Native or script files here are unusual; not proof by itself." else "")
-                    )
-                )
+                // Content checks ignore the file name: disguised archives and random-named text files are found here.
+                considerFile(f, false, run, ev, modKeys)
+                textFile(f, false, run, ev)
             }
         }
         if (overflow > 0) {
             sink.flag("dl:more", ScanFinding("INFO", "More Downloads files omitted", "$overflow further Minecraft-related files were left out."))
         }
+    }
+
+    // ---- content X-ray ------------------------------------------------------------------------
+
+    /** Opens real archives and, by the ZIP magic bytes "PK", archives hiding behind any other name. */
+    private fun considerFile(f: McEntry, inMods: Boolean, run: Run, ev: Evidence, modKeys: MutableSet<String>) {
+        if (run.expired()) return
+        val ext = if (f.name.contains('.')) f.name.substringAfterLast('.').lowercase() else ""
+        if (ext in INSPECT_EXT) {
+            xrayArchive(f, inMods, false, run, ev, modKeys)
+            return
+        }
+        if (ext in ZIP_OK_EXT) return
+        if (f.size < 100 || f.size > MAX_ARCHIVE_BYTES) return
+        val head = f.readHead(2) ?: return
+        if (head.size == 2 && head[0] == 0x50.toByte() && head[1] == 0x4B.toByte()) {
+            xrayArchive(f, inMods, true, run, ev, modKeys)
+        }
+    }
+
+    private fun scanHidden(game: McEntry, run: Run, ev: Evidence, modKeys: MutableSet<String>) {
+        val stack = ArrayDeque<Pair<McEntry, Int>>()
+        stack.addLast(Pair(game, 0))
+        var files = 0
+        while (stack.isNotEmpty()) {
+            if (run.expired()) return
+            val (dir, depth) = stack.removeLast()
+            for (k in dir.children() ?: continue) {
+                if (k.isDir) {
+                    if (depth < 3 && k.name.lowercase() !in SKIP_DIRS) stack.addLast(Pair(k, depth + 1))
+                    continue
+                }
+                if (++files > MAX_HIDDEN_FILES) return
+                considerFile(k, dir.name.equals("mods", true), run, ev, modKeys)
+            }
+        }
+    }
+
+    private fun xrayArchive(e: McEntry, inMods: Boolean, disguised: Boolean, run: Run, ev: Evidence, modKeys: MutableSet<String>) {
+        if (run.expired() || !run.xrayed.add(e.path)) return
+        val sink = run.sink
+        if (e.size > MAX_ARCHIVE_BYTES) {
+            sink.flag("xb:" + e.path, ScanFinding("INFO", "Large archive not opened", "${e.path} is over ${MAX_ARCHIVE_BYTES / (1024 * 1024)} MB."))
+            return
+        }
+        val x = e.withFile { f -> ArchiveXRay.inspect(f, e.name, run.inflate, ARCHIVE_MS) { xr -> !ArchiveXRay.isWhitelisted(xr.ids) } }
+        if (x == null) {
+            if (!disguised) {
+                sink.flag(
+                    "xn:" + e.path,
+                    ScanFinding("INFO", "Archive could not be opened", "${e.path} is not a valid ZIP/JAR or could not be read here. Modified ${ts(e.modified)}.")
+                )
+            }
+            return
+        }
+        for (k in x.strong) {
+            modKeys.add(k)
+            ev.add(k, "ARTIFACT")
+        }
+        val hasCode = x.classCount > 0 || x.hasMeta
+        val signatures = if (x.strong.isEmpty()) "" else "Cheat signatures: ${x.strong.joinToString(", ")}. "
+        val breakdown = ArchiveXRay.describe(x) + " | Path: " + e.path.takeLast(80) + " | Modified: " + ts(e.modified)
+        if (disguised) {
+            val sure = hasCode || x.strong.isNotEmpty()
+            val note = if (sure) "" else "No Java classes or mod metadata inside, so it may be an ordinary data file. "
+            sink.flag(
+                "xr:" + e.path,
+                ScanFinding(if (sure) "HIGH" else "WARN", "Hidden Archive With Disguised Extension: ${e.name}", signatures + note + breakdown)
+            )
+        } else if (x.strong.isNotEmpty()) {
+            sink.flag(
+                "xr:" + e.path,
+                ScanFinding("HIGH", "Archive contents match cheat client signatures (${x.strong.joinToString(", ")})", signatures + breakdown)
+            )
+        } else if (!ArchiveXRay.isWhitelisted(x.ids) && (inMods || x.hasMeta || x.packages.isNotEmpty())) {
+            sink.flag("xr:" + e.path, ScanFinding("WARN", "Custom/Unverified Mod \u2014 Contents Extracted", breakdown))
+        }
+    }
+
+    private fun scanConfigText(config: McEntry, run: Run, ev: Evidence) {
+        val stack = ArrayDeque<Pair<McEntry, Int>>()
+        stack.addLast(Pair(config, 0))
+        var files = 0
+        while (stack.isNotEmpty()) {
+            if (run.expired()) return
+            val (dir, depth) = stack.removeLast()
+            for (k in dir.children() ?: continue) {
+                if (k.isDir) {
+                    if (depth < 3) stack.addLast(Pair(k, depth + 1))
+                    continue
+                }
+                if (++files > 600) return
+                textFile(k, true, run, ev)
+            }
+        }
+    }
+
+    /** Reads a small text/config file by content (its name is irrelevant) and reports cheat-like keys with a short excerpt. */
+    private fun textFile(f: McEntry, inGame: Boolean, run: Run, ev: Evidence) {
+        if (f.size <= 0 || f.size > MAX_TEXT_BYTES) return
+        val ext = if (f.name.contains('.')) f.name.substringAfterLast('.').lowercase() else ""
+        if (ext.isNotEmpty() && ext !in TEXT_EXT) return
+        val bytes = f.readTail(MAX_TEXT_BYTES) ?: return
+        if (bytes.size >= 2 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4B.toByte()) return
+        if (!ArchiveXRay.looksLikeText(bytes)) return
+        val hit = ArchiveXRay.analyzeText(String(bytes, Charsets.UTF_8))
+        val heuristic = (hit.hard.size >= 2 && hit.context.isNotEmpty()) ||
+            (hit.hard.isNotEmpty() && hit.soft.size >= 2 && hit.context.isNotEmpty())
+        if (hit.strong.isEmpty() && !heuristic) return
+        val matched = (hit.strong.map { "$it(signature)" } + hit.hard + hit.soft + hit.context).joinToString(", ").take(150)
+        val snippet = ArchiveXRay.snippet(hit.lines).ifEmpty { "(matching lines look like credentials, hidden)" }
+        val sev = when {
+            hit.strong.isNotEmpty() && inGame -> "HIGH"
+            inGame -> "WARN"
+            hit.strong.isNotEmpty() -> "WARN"
+            else -> "INFO"
+        }
+        val title = if (hit.strong.isNotEmpty()) "Text/config file names a cheat client (${hit.strong.joinToString(", ")})"
+        else "Settings file looks like a cheat client's (heuristic)"
+        if (inGame) for (k in hit.strong) ev.add(k, "CONFIG")
+        run.sink.flag(
+            "tx:" + f.path,
+            ScanFinding(
+                sev, title,
+                "File: ${f.name} | Matched: $matched | Modified: ${ts(f.modified)} | Path: ${f.path.takeLast(80)} | Snippet: $snippet"
+            )
+        )
     }
 }

@@ -117,7 +117,7 @@ fun ScannerApp() {
                         "last 15 minutes, whether USB debugging is on, and basic root/debugger indicators. With All " +
                         "Files Access it also lists file and folder names (with last-modified times) across your storage and trash, " +
                         "and, if you pick one, the folder you choose. It also looks " +
-                        "inside Minecraft Java and Bedrock folders (mod file lists, configs, resource packs and recent game logs). It does not read " +
+                        "inside Minecraft Java and Bedrock folders: it opens mod and other archive files (even with odd names) to list what is inside, reads small text/config files in Minecraft config and Downloads folders, and checks resource packs and recent game logs. Only matching names and lines (up to 200 characters) are sent. It does not read " +
                         "messages, photos, launcher login data or game worlds. " +
                         "The result is sent to the admin who gave you this PIN.",
                     fontSize = 12.sp,
