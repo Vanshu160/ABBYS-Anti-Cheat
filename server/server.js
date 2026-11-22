@@ -83,6 +83,11 @@ app.post("/api/submit-report", rateLimit("submit", 20, 60 * 1000), (req, res) =>
   discord.notify(process.env.DISCORD_WEBHOOK_URL, r);
 });
 
+// Setup check for the Discord copy: yes/no flags and the last result, never the URL itself.
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, discord: discord.describe(process.env.DISCORD_WEBHOOK_URL) });
+});
+
 // 4. The creator's dashboard polls for the result, proving itself with the admin token
 app.get("/api/session/:pin", rateLimit("session", 120, 60 * 1000), (req, res) => {
   const r = store.read(req.params.pin, req.get("x-session-token") || "");

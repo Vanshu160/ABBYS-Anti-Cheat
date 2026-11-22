@@ -50,23 +50,46 @@ function buildPayload(r) {
   return { username: "ABYSS AntiCheat", allowed_mentions: { parse: [] }, embeds: [embed] };
 }
 
+/** A pasted value often carries a trailing space/newline or quotes; strip them before validating. */
+function normalizeUrl(raw) {
+  return String(raw == null ? "" : raw).trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+}
+
+/** What the last attempt did (never contains the URL). Shown by /api/health so a broken setup can be diagnosed. */
+const status = { lastAt: null, lastResult: "no report posted yet" };
+function record(result) {
+  status.lastAt = new Date().toISOString();
+  status.lastResult = result;
+}
+
+/** configured: variable present; valid: it looks like a discord.com webhook after cleanup. */
+function describe(raw) {
+  const url = normalizeUrl(raw);
+  return { configured: url.length > 0, valid: WEBHOOK_RE.test(url), lastAt: status.lastAt, lastResult: status.lastResult };
+}
+
 /**
  * Posts one report to Discord. Fire-and-forget: it never throws and never affects the upload.
  * Only an exact discord.com webhook URL is accepted, so the variable cannot point the server at anything else.
  */
-async function notify(url, r, fetchImpl = globalThis.fetch) {
-  if (!url || !WEBHOOK_RE.test(url) || !r || !Array.isArray(r.report) || typeof fetchImpl !== "function") return false;
+async function notify(rawUrl, r, fetchImpl = globalThis.fetch) {
+  const url = normalizeUrl(rawUrl);
+  if (!url) { record("skipped: DISCORD_WEBHOOK_URL is not set"); return false; }
+  if (!WEBHOOK_RE.test(url)) { record("skipped: DISCORD_WEBHOOK_URL is not a valid discord.com webhook address"); return false; }
+  if (!r || !Array.isArray(r.report) || typeof fetchImpl !== "function") { record("skipped: nothing to post"); return false; }
   try {
     const form = new FormData();
     form.append("payload_json", JSON.stringify(buildPayload(r)));
     form.append("files[0]", new Blob([reportText(r)], { type: "text/plain" }), "abyss-report-" + r.pin + "-scan" + r.scans + ".txt");
     const res = await fetchImpl(url, { method: "POST", body: form, signal: AbortSignal.timeout(8000) });
     if (!res.ok) console.error("discord webhook answered", res.status);
+    record(res.ok ? "posted (HTTP " + res.status + ")" : "Discord refused it: HTTP " + res.status + (res.status === 404 ? " (webhook deleted or wrong)" : ""));
     return res.ok;
   } catch (e) {
     console.error("discord webhook failed:", e && e.message);
+    record("failed: " + (e && e.message ? String(e.message).slice(0, 100) : "network error"));
     return false;
   }
 }
 
-module.exports = { notify, buildPayload, reportText, WEBHOOK_RE };
+module.exports = { normalizeUrl, describe, notify, buildPayload, reportText, WEBHOOK_RE };
