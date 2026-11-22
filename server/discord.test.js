@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { notify, buildPayload, reportText, normalizeUrl, describe } = require("./discord");
+const { notify, buildPayload, reportText, normalizeUrl, describe, resolveUrl } = require("./discord");
 const { SessionStore } = require("./sessions");
 
 const URL_OK = "https://discord.com/api/webhooks/123456789/abc-DEF_ghi";
@@ -95,11 +95,24 @@ test("a pasted URL with trailing newline, spaces or quotes still works", async (
 });
 
 test("describe reports setup state and last result without leaking the URL", async () => {
-  assert.deepEqual([describe(undefined).configured, describe(undefined).valid], [false, false]);
-  assert.deepEqual([describe("nonsense").configured, describe("nonsense").valid], [true, false]);
-  assert.deepEqual([describe(URL_OK + "\n").configured, describe(URL_OK + "\n").valid], [true, true]);
+  const env = (v) => ({ DISCORD_WEBHOOK_URL: v });
+  assert.deepEqual([describe({}).configured, describe({}).valid], [false, false]);
+  assert.deepEqual([describe(env("nonsense")).configured, describe(env("nonsense")).valid], [true, false]);
+  assert.deepEqual([describe(env(URL_OK + "\n")).configured, describe(env(URL_OK + "\n")).valid], [true, true]);
   await notify(URL_OK, submitted(cheat), async () => ({ ok: false, status: 404 }));
-  const d = describe(URL_OK);
+  const d = describe(env(URL_OK));
   assert.match(d.lastResult, /HTTP 404/);
   assert.ok(!JSON.stringify(d).includes("webhooks"));
+});
+
+test("the webhook is found even under a different variable name, and related names are listed without values", () => {
+  assert.equal(resolveUrl({ DISCORD_WEBHOOK_URL: URL_OK }), URL_OK);
+  assert.equal(resolveUrl({ discord: URL_OK + "\n", PATH: "/bin" }), URL_OK);
+  assert.equal(resolveUrl({ MY_HOOK: '"' + URL_OK + '"' }), URL_OK);
+  assert.equal(resolveUrl({ PATH: "/bin", NODE_ENV: "production" }), "");
+  assert.equal(resolveUrl({ DISCORD_WEBHOOK_URL: "https://evil.example/api/webhooks/1/a" }).includes("discord.com"), false);
+  const d = describe({ Discord_Hook: URL_OK, PATH: "x" });
+  assert.equal(d.valid, true);
+  assert.deepEqual(d.relatedVariableNames, ["Discord_Hook"]);
+  assert.ok(!JSON.stringify(d).includes("1234"));
 });
