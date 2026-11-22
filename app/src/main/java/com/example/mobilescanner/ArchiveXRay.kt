@@ -28,8 +28,31 @@ internal object Terms {
         "thunderhack" to "thunderhack", "aristois" to "aristois", "doomsday" to "doomsday",
         "baritone" to "baritone", "meteorclient" to "meteor",
         "wurstclient" to "wurst", "rusherhack" to "rusherhack", "salhack" to "salhack",
-        "kamiblue" to "kamiblue", "impactclient" to "impact", "futureclient" to "future"
+        "kamiblue" to "kamiblue", "impactclient" to "impact", "futureclient" to "future",
+        // Distinctive client names: long and unusual enough to match inside the letters-and-digits form.
+        "3arthh4ck" to "3arthh4ck", "nursultan" to "nursultan", "zamorozka" to "zamorozka", "melonity" to "melonity",
+        "wexside" to "wexside", "troxill" to "troxill", "catlean" to "catlean", "wweclient" to "wwe client",
+        "wildclient" to "wild client", "excellentclient" to "excellent client", "onixclient" to "onix client",
+        "flarial" to "flarial", "ambrosial" to "ambrosial", "liquidbounceplus" to "liquidbounce", "gamesense" to "gamesense"
     )
+
+    /**
+     * Client names that are short or look like ordinary words. They only count as whole words (or whole word groups),
+     * never inside a longer word, so "Horion" is caught but "horizon" is not. Ordinary English words ("Future", "Delta",
+     * "Vector", "Impact", "Venus"...) are only accepted together with "client", for example SigmaClient or Delta Client.
+     */
+    private val DISTINCT_WORDS = listOf("horion", "latite", "cornos", "akrien", "relake", "nightx", "nitr0", "verist")
+    private val ORDINARY_WORDS = listOf(
+        "future", "impact", "sigma", "venus", "delta", "eternity", "expensive", "rockstar", "ares", "vector",
+        "apollo", "celestial", "meteor", "inertia", "phobos", "zephyr", "solstice", "primordial", "prax", "kodiak",
+        "kion", "wolfram", "minced", "deadcode"
+    )
+    /** phrase (letters and digits only, lower case) -> family key */
+    private val PHRASES: Map<String, String> = buildMap {
+        for (w in DISTINCT_WORDS) put(w, w)
+        for (w in ORDINARY_WORDS) put(w + "client", w)
+        put("apollowurst", "wurst")
+    }
 
     /** Short names: only matched as a whole word, so "vape" never hits inside another word. */
     private val STRONG_SHORT = setOf("vape", "wurst", "manthe")
@@ -67,8 +90,24 @@ internal object Terms {
         for ((term, key) in STRONG_LONG) {
             if (flat.contains(term)) return key
         }
-        if (!(low.contains("vape") || low.contains("wurst") || low.contains("manthe"))) return null
-        for (t in tokens(s)) if (t in STRONG_SHORT) return t
+        if (low.contains("vape") || low.contains("wurst") || low.contains("manthe")) {
+            for (t in tokens(s)) if (t in STRONG_SHORT) return t
+        }
+        return matchPhrase(s, flat)
+    }
+
+    /** Whole-word(-group) match of PHRASES, with a cheap pre-check because this runs on many strings. */
+    private fun matchPhrase(s: String, flat: String): String? {
+        if (PHRASES.keys.none { flat.contains(it) }) return null
+        val toks = tokens(s)
+        for (i in toks.indices) {
+            var joined = ""
+            for (n in 0 until 3) {
+                if (i + n >= toks.size) break
+                joined += toks[i + n]
+                PHRASES[joined]?.let { return it }
+            }
+        }
         return null
     }
 
@@ -80,7 +119,7 @@ internal object Terms {
     }
 
     /** Number of cheat-client signatures the scanner knows by name. */
-    val signatureCount: Int get() = STRONG_LONG.size + STRONG_SHORT.size
+    val signatureCount: Int get() = STRONG_LONG.size + STRONG_SHORT.size + PHRASES.size
 
     fun hasEnabledTrue(line: String) = ENABLED_TRUE.containsMatchIn(line)
     fun isContextWord(t: String) = t in CONTEXT_WORDS
