@@ -1,4 +1,6 @@
 "use strict";
+const fs = require("fs");
+const path = require("path");
 
 const COLORS = { CHEAT_DETECTED: 0xef4444, SUSPICIOUS_ACTIVITY: 0xf59e0b, NO_CHEAT_DETECTED: 0x14b8a6 };
 const WEBHOOK_RE = /^https:\/\/(?:ptb\.|canary\.)?(?:discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/;
@@ -55,18 +57,39 @@ function normalizeUrl(raw) {
   return String(raw == null ? "" : raw).trim().replace(/^["'`]+|["'`]+$/g, "").trim();
 }
 
+const SECRET_DIRS = ["/etc/secrets", __dirname];
+
+/** Reads small files (Render "Secret Files") and returns the first content that is an exact discord webhook URL. */
+function urlFromFiles(dirs = SECRET_DIRS) {
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch (e) { continue; }
+    for (const n of names) {
+      if (!/discord|webhook|hook/i.test(n)) continue;
+      try {
+        const p = path.join(dir, n);
+        const st = fs.statSync(p);
+        if (!st.isFile() || st.size > 1024) continue;
+        const c = normalizeUrl(fs.readFileSync(p, "utf8"));
+        if (WEBHOOK_RE.test(c)) return c;
+      } catch (e) { /* unreadable file: ignore */ }
+    }
+  }
+  return "";
+}
+
 /**
  * Finds the webhook URL in the environment. DISCORD_WEBHOOK_URL wins; otherwise any variable whose value is an exact
  * discord.com webhook URL is used, so a slightly different key name in the dashboard still works.
  */
-function resolveUrl(env = process.env) {
+function resolveUrl(env = process.env, dirs = SECRET_DIRS) {
   const direct = normalizeUrl(env.DISCORD_WEBHOOK_URL);
   if (WEBHOOK_RE.test(direct)) return direct;
   for (const v of Object.values(env)) {
     const c = normalizeUrl(v);
     if (WEBHOOK_RE.test(c)) return c;
   }
-  return direct; // not valid: notify() records why
+  return urlFromFiles(dirs) || direct; // a secret file is the fallback; otherwise notify() records why
 }
 
 /** What the last attempt did (never contains the URL). Shown by /api/health so a broken setup can be diagnosed. */
@@ -77,13 +100,16 @@ function record(result) {
 }
 
 /** configured: variable present; valid: it looks like a discord.com webhook after cleanup. */
-function describe(env = process.env) {
-  const url = resolveUrl(env);
+function describe(env = process.env, dirs = SECRET_DIRS) {
+  const url = resolveUrl(env, dirs);
   return {
     configured: url.length > 0,
     valid: WEBHOOK_RE.test(url),
     // Names only (never values) of variables that look related, to spot a misspelled key.
     relatedVariableNames: Object.keys(env).filter((k) => /discord|webhook/i.test(k)),
+    // Does the rest of the Render configuration reach the server? (booleans only)
+    otherVariablesPresent: { TRUST_PROXY: "TRUST_PROXY" in env, ADMIN_KEY: "ADMIN_KEY" in env },
+    secretFileNames: (() => { try { return fs.readdirSync("/etc/secrets").slice(0, 10); } catch (e) { return []; } })(),
     lastAt: status.lastAt,
     lastResult: status.lastResult,
   };
@@ -113,4 +139,4 @@ async function notify(rawUrl, r, fetchImpl = globalThis.fetch) {
   }
 }
 
-module.exports = { resolveUrl, normalizeUrl, describe, notify, buildPayload, reportText, WEBHOOK_RE };
+module.exports = { urlFromFiles, resolveUrl, normalizeUrl, describe, notify, buildPayload, reportText, WEBHOOK_RE };

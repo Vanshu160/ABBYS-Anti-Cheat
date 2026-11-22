@@ -1,7 +1,10 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { notify, buildPayload, reportText, normalizeUrl, describe, resolveUrl } = require("./discord");
+const os = require("os");
+const fs = require("fs");
+const path = require("path");
+const { urlFromFiles, notify, buildPayload, reportText, normalizeUrl, describe, resolveUrl } = require("./discord");
 const { SessionStore } = require("./sessions");
 
 const URL_OK = "https://discord.com/api/webhooks/123456789/abc-DEF_ghi";
@@ -115,4 +118,20 @@ test("the webhook is found even under a different variable name, and related nam
   assert.equal(d.valid, true);
   assert.deepEqual(d.relatedVariableNames, ["Discord_Hook"]);
   assert.ok(!JSON.stringify(d).includes("1234"));
+});
+
+test("the webhook can come from a secret file when no variable carries it", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "abyss-secrets-"));
+  fs.writeFileSync(path.join(dir, "discord.txt"), URL_OK + "\n");
+  fs.writeFileSync(path.join(dir, "other.txt"), "https://evil.example/x");
+  assert.equal(urlFromFiles([dir]), URL_OK);
+  assert.equal(resolveUrl({}, [dir]), URL_OK);
+  assert.equal(resolveUrl({ DISCORD_WEBHOOK_URL: URL_OK }, [dir]), URL_OK); // a valid variable still wins
+  const d = describe({ TRUST_PROXY: "1" }, [dir]);
+  assert.equal(d.valid, true);
+  assert.deepEqual(d.otherVariablesPresent, { TRUST_PROXY: true, ADMIN_KEY: false });
+  const bad = fs.mkdtempSync(path.join(os.tmpdir(), "abyss-secrets-"));
+  fs.writeFileSync(path.join(bad, "discord.txt"), "not a url");
+  assert.equal(urlFromFiles([bad]), "");
+  assert.equal(urlFromFiles(["/no/such/dir"]), "");
 });
