@@ -3,6 +3,7 @@ const express = require("express");
 const path = require("path");
 
 const { SessionStore, MAX_FINDINGS } = require("./sessions");
+const discord = require("./discord");
 
 const app = express();
 app.disable("x-powered-by");
@@ -78,6 +79,8 @@ app.post("/api/submit-report", rateLimit("submit", 20, 60 * 1000), (req, res) =>
   if (r.error === "invalid") return res.status(401).json({ error: "invalid session" });
   if (r.error) return res.status(400).json({ error: "report must be an array of at most " + MAX_FINDINGS + " findings" });
   res.json({ success: true });
+  // A copy goes to the ABYSS Discord channel (if DISCORD_WEBHOOK_URL is set). Never blocks or fails the upload.
+  discord.notify(process.env.DISCORD_WEBHOOK_URL, r);
 });
 
 // 4. The creator's dashboard polls for the result, proving itself with the admin token
