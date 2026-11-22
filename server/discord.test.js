@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { notify, buildPayload, reportText } = require("./discord");
+const { notify, buildPayload, reportText, normalizeUrl, describe } = require("./discord");
 const { SessionStore } = require("./sessions");
 
 const URL_OK = "https://discord.com/api/webhooks/123456789/abc-DEF_ghi";
@@ -81,4 +81,25 @@ test("notify does nothing without a valid discord webhook URL and never throws",
   assert.equal(await notify("https://discord.com.evil.example/api/webhooks/1/a", r, boom), false);
   assert.equal(await notify(URL_OK, r, async () => { throw new Error("network down"); }), false);
   assert.equal(await notify(URL_OK, r, async () => ({ ok: false, status: 429 })), false);
+});
+
+test("a pasted URL with trailing newline, spaces or quotes still works", async () => {
+  assert.equal(normalizeUrl(" " + URL_OK + "\n"), URL_OK);
+  assert.equal(normalizeUrl('"' + URL_OK + '"'), URL_OK);
+  for (const raw of [URL_OK + "\n", " " + URL_OK + " ", '"' + URL_OK + '"']) {
+    let called = null;
+    const ok = await notify(raw, submitted(cheat), async (url) => { called = url; return { ok: true, status: 204 }; });
+    assert.equal(ok, true);
+    assert.equal(called, URL_OK);
+  }
+});
+
+test("describe reports setup state and last result without leaking the URL", async () => {
+  assert.deepEqual([describe(undefined).configured, describe(undefined).valid], [false, false]);
+  assert.deepEqual([describe("nonsense").configured, describe("nonsense").valid], [true, false]);
+  assert.deepEqual([describe(URL_OK + "\n").configured, describe(URL_OK + "\n").valid], [true, true]);
+  await notify(URL_OK, submitted(cheat), async () => ({ ok: false, status: 404 }));
+  const d = describe(URL_OK);
+  assert.match(d.lastResult, /HTTP 404/);
+  assert.ok(!JSON.stringify(d).includes("webhooks"));
 });
