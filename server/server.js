@@ -80,12 +80,12 @@ app.post("/api/submit-report", rateLimit("submit", 20, 60 * 1000), (req, res) =>
   if (r.error) return res.status(400).json({ error: "report must be an array of at most " + MAX_FINDINGS + " findings" });
   res.json({ success: true });
   // A copy goes to the ABYSS Discord channel (if DISCORD_WEBHOOK_URL is set). Never blocks or fails the upload.
-  discord.notify(process.env.DISCORD_WEBHOOK_URL, r);
+  discord.notify(discord.resolveUrl(), r);
 });
 
 // Setup check for the Discord copy: yes/no flags and the last result, never the URL itself.
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, discord: discord.describe(process.env.DISCORD_WEBHOOK_URL) });
+  res.json({ ok: true, discord: discord.describe() });
 });
 
 // 4. The creator's dashboard polls for the result, proving itself with the admin token

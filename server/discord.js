@@ -55,6 +55,20 @@ function normalizeUrl(raw) {
   return String(raw == null ? "" : raw).trim().replace(/^["'`]+|["'`]+$/g, "").trim();
 }
 
+/**
+ * Finds the webhook URL in the environment. DISCORD_WEBHOOK_URL wins; otherwise any variable whose value is an exact
+ * discord.com webhook URL is used, so a slightly different key name in the dashboard still works.
+ */
+function resolveUrl(env = process.env) {
+  const direct = normalizeUrl(env.DISCORD_WEBHOOK_URL);
+  if (WEBHOOK_RE.test(direct)) return direct;
+  for (const v of Object.values(env)) {
+    const c = normalizeUrl(v);
+    if (WEBHOOK_RE.test(c)) return c;
+  }
+  return direct; // not valid: notify() records why
+}
+
 /** What the last attempt did (never contains the URL). Shown by /api/health so a broken setup can be diagnosed. */
 const status = { lastAt: null, lastResult: "no report posted yet" };
 function record(result) {
@@ -63,9 +77,16 @@ function record(result) {
 }
 
 /** configured: variable present; valid: it looks like a discord.com webhook after cleanup. */
-function describe(raw) {
-  const url = normalizeUrl(raw);
-  return { configured: url.length > 0, valid: WEBHOOK_RE.test(url), lastAt: status.lastAt, lastResult: status.lastResult };
+function describe(env = process.env) {
+  const url = resolveUrl(env);
+  return {
+    configured: url.length > 0,
+    valid: WEBHOOK_RE.test(url),
+    // Names only (never values) of variables that look related, to spot a misspelled key.
+    relatedVariableNames: Object.keys(env).filter((k) => /discord|webhook/i.test(k)),
+    lastAt: status.lastAt,
+    lastResult: status.lastResult,
+  };
 }
 
 /**
@@ -92,4 +113,4 @@ async function notify(rawUrl, r, fetchImpl = globalThis.fetch) {
   }
 }
 
-module.exports = { normalizeUrl, describe, notify, buildPayload, reportText, WEBHOOK_RE };
+module.exports = { resolveUrl, normalizeUrl, describe, notify, buildPayload, reportText, WEBHOOK_RE };
