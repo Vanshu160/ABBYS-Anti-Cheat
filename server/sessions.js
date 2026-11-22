@@ -130,7 +130,7 @@ class SessionStore {
     s.status = "COMPLETED";
     s.scans++;
     s.reportAt = this.now();
-    return { success: true, expiresAt: s.expiresAt };
+    return { success: true, expiresAt: s.expiresAt, pin: s.pin, admin: s.admin, scans: s.scans, report: s.report, verdict: s.verdict };
   }
 
   /** The admin's dashboard reads a session with the admin token. */

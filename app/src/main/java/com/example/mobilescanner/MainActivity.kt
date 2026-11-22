@@ -478,7 +478,7 @@ private fun PinStep(
                     "folders, and checks resource packs and recent game logs. It lists the website names that downloaded " +
                     "files came from. Only matching names and lines (up to 200 characters) are sent. It does not read " +
                     "messages, photos, launcher login data or game worlds. The result is sent to the admin who gave you " +
-                    "this PIN.",
+                    "this PIN, and a copy is also posted to the ABYSS team's Discord server.",
                 fontSize = 12.sp,
                 color = MutedText
             )
@@ -593,7 +593,7 @@ private fun HomeStep(onSelectFolder: () -> Unit, onAutoDetect: () -> Unit, onMod
                 "1. Tap Select Folder and pick the launcher's .minecraft folder (or com.mojang for Bedrock).",
                 "2. Android 11+ may refuse Android/data; folders under /games usually work.",
                 "3. Or tap Auto Detect to search for launcher folders.",
-                "4. The report is sent to the admin who gave you the PIN."
+                "4. The report is sent to the admin who gave you the PIN, and a copy goes to the ABYSS Discord."
             )) {
                 Text(step, fontSize = 13.sp, color = MutedText)
                 Spacer(modifier = Modifier.height(2.dp))

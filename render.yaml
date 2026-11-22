@@ -10,3 +10,6 @@ services:
     envVars:
       - key: TRUST_PROXY
         value: "1"
+      # Optional: Discord webhook URL; every uploaded report is also posted there. Set it in the Render dashboard.
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
