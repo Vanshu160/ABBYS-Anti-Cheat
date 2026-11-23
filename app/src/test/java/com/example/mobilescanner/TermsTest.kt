@@ -54,6 +54,15 @@ class TermsTest {
         assertTrue(Terms.signatureCount > 60)
     }
 
+    @Test fun cheatModuleNamesAreFoundInClassNamesAndStrings() {
+        assertEquals(listOf("criticals"), Terms.cheatModules("meteor/modules/Criticals.class"))
+        assertEquals(setOf("nofall", "bhop"), Terms.cheatModules("NoFall,BHop settings").toSet())
+        assertEquals(setOf("chestesp", "scaffoldwalk"), Terms.cheatModules("ChestESP ScaffoldWalk").toSet())
+        assertTrue(Terms.cheatModules("net/minecraft/client/Minecraft.class").isEmpty())
+        assertTrue(Terms.cheatModules("fall damage and jump boost").isEmpty())
+        assertTrue(Terms.cheatModules("abc").isEmpty())
+    }
+
     @Test fun moreClientsAndModuleNames() {
         for (s in listOf("ForgeHax-1.12.jar", "Novoline.jar", "Huzuni.jar", "Mahanware", "StarHack", "esohack", "Kinodupe", "G4DMODE Client",
             "AimBot.class", "net/x/AutoCrystal.class", "AutoAnchor", "Konas.jar", "Seppuku-1.12", "Xulu.jar", "Hanabi.jar", "Astolfo.jar", "Borion.mcpack",

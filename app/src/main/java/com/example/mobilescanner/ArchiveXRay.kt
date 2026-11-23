@@ -64,6 +64,32 @@ internal object Terms {
         put("apollowurst", "wurst")
     }
 
+    /**
+     * Module names that exist in cheat clients and almost nowhere else (letters and digits only). One of these alone is
+     * not proof, but three different ones inside the code of one archive are a cheat client even when it has been
+     * renamed, repackaged or has no known name. Module display names survive obfuscation as strings in the class files.
+     */
+    private val MODULES = listOf(
+        "killaura", "aimbot", "aimassist", "triggerbot", "criticals", "antiknockback", "antikb", "autoclicker",
+        "autototem", "crystalaura", "autocrystal", "anchoraura", "autoanchor", "bowaimbot", "noslowdown", "fastbow",
+        "autosoup", "autopot", "nofall", "bhop", "bunnyhop", "longjump", "airjump", "scaffoldwalk",
+        "chestesp", "playeresp", "storageesp", "entityesp", "autoblock", "autosprint", "fastplace", "fastbreak", "nuker"
+    )
+
+    /** The cheat module names found in a string (canonical lower case), or an empty list. */
+    fun cheatModules(s: String): List<String> {
+        if (s.length < 5) return emptyList()
+        val flat = s.lowercase().filter { it.isLetterOrDigit() }
+        var out: ArrayList<String>? = null
+        for (m in MODULES) {
+            if (flat.contains(m)) {
+                if (out == null) out = ArrayList()
+                out.add(m)
+            }
+        }
+        return out ?: emptyList()
+    }
+
     /** Short names: only matched as a whole word, so "vape" never hits inside another word. */
     private val STRONG_SHORT = setOf("vape", "wurst", "manthe")
 
@@ -149,6 +175,8 @@ internal class XRay(val fileName: String) {
     val tags = LinkedHashSet<String>()
     val weak = LinkedHashSet<String>()
     val combat = LinkedHashSet<String>()
+    /** Distinct cheat module names (killaura, nofall...) seen in class names or class strings. */
+    val modules = LinkedHashSet<String>()
     var classCount = 0
     /** A server plugin (plugin.yml and friends), e.g. a Bukkit anti-cheat: its class names mention cheats without being one. */
     var serverPlugin = false
@@ -235,6 +263,7 @@ internal object ArchiveXRay {
                             x.tags.add("$it@path")
                         }
                         for (w in Terms.weakTerms(name)) x.weak.add(w)
+                        for (m in Terms.cheatModules(name)) x.modules.add(m)
                         continue
                     }
                     when {
@@ -455,6 +484,7 @@ internal object ArchiveXRay {
                     x.tags.add("$it@strings")
                 }
                 for (w in Terms.weakTerms(str)) x.weak.add(w)
+                for (m in Terms.cheatModules(str)) x.modules.add(m)
             }
         }
     }
@@ -466,6 +496,7 @@ internal object ArchiveXRay {
             .joinToString(", ") { "${it.key}(${it.value})" }.take(100).ifEmpty { "-" }
         val ind = LinkedHashSet<String>()
         ind.addAll(x.tags)
+        if (x.modules.isNotEmpty()) ind.add("modules:" + x.modules.take(6).joinToString("+"))
         for (w in x.weak) ind.add("$w(weak)")
         ind.addAll(x.combat)
         x.agent?.let { ind.add("java-agent:$it") }
