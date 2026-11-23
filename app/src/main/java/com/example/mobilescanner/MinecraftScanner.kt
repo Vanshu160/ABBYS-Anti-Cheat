@@ -1088,12 +1088,18 @@ object MinecraftScanner {
             if (codeEvidence) SignalKind.ARCHIVE_CODE else SignalKind.ARCHIVE_META,
             x.strong.joinToString("/"), e.path.takeLast(80), x.tags.take(4).joinToString(", ").ifEmpty { "name in archive" }
         )
+        // No known name, but several different cheat modules in the code: a renamed or repackaged cheat client.
+        val moduleSet = x.strong.isEmpty() && !x.serverPlugin && x.modules.size >= 3
+        val moduleList = x.modules.take(8).joinToString(", ")
+        val moduleSignal = if (!moduleSet) null else CheatSignal(
+            SignalKind.ARCHIVE_CODE, "unidentified cheat client", e.path.takeLast(80), "modules in code: $moduleList"
+        )
         if (disguised) {
-            val sure = hasCode || x.strong.isNotEmpty()
+            val sure = hasCode || x.strong.isNotEmpty() || moduleSet
             val note = if (sure) "" else "No Java classes or mod metadata inside, so it may be an ordinary data file. "
             sink.flag(
                 "xr:" + e.path,
-                ScanFinding(if (sure) "HIGH" else "WARN", "Hidden Archive With Disguised Extension: ${e.name}", signatures + note + breakdown, signal)
+                ScanFinding(if (sure) "HIGH" else "WARN", "Hidden Archive With Disguised Extension: ${e.name}", signatures + note + breakdown, signal ?: moduleSignal)
             )
         } else if (x.strong.isNotEmpty()) {
             val note = if (x.serverPlugin) "This is a server plugin, not a client mod, so it is not treated as a cheat client. "
@@ -1104,6 +1110,17 @@ object MinecraftScanner {
                     if (codeEvidence) "HIGH" else "WARN",
                     "Archive contents match cheat client signatures (${x.strong.joinToString(", ")})",
                     signatures + note + breakdown, signal
+                )
+            )
+        } else if (moduleSet) {
+            sink.flag(
+                "xr:" + e.path,
+                ScanFinding(
+                    "HIGH",
+                    "Archive code contains a set of cheat modules ($moduleList)",
+                    "No known client name, but the code has ${x.modules.size} different cheat modules ($moduleList). " +
+                        "Found by content, so renaming the file does not hide it. " + breakdown,
+                    moduleSignal
                 )
             )
         } else if (!ArchiveXRay.isWhitelisted(x.ids) && (inMods || x.hasMeta || x.packages.isNotEmpty())) {

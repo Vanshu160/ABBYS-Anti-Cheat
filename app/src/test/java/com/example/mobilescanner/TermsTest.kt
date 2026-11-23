@@ -53,4 +53,13 @@ class TermsTest {
     @Test fun signatureCountGrew() {
         assertTrue(Terms.signatureCount > 60)
     }
+
+    @Test fun cheatModuleNamesAreFoundInClassNamesAndStrings() {
+        assertEquals(listOf("criticals"), Terms.cheatModules("meteor/modules/Criticals.class"))
+        assertEquals(setOf("nofall", "bhop"), Terms.cheatModules("NoFall,BHop settings").toSet())
+        assertEquals(setOf("chestesp", "scaffoldwalk"), Terms.cheatModules("ChestESP ScaffoldWalk").toSet())
+        assertTrue(Terms.cheatModules("net/minecraft/client/Minecraft.class").isEmpty())
+        assertTrue(Terms.cheatModules("fall damage and jump boost").isEmpty())
+        assertTrue(Terms.cheatModules("abc").isEmpty())
+    }
 }

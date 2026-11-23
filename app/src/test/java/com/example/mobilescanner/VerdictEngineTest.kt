@@ -154,4 +154,16 @@ class VerdictEngineTest {
     @Test fun findingsWithoutASignalHaveNone() {
         assertNull(ScanFinding("WARN", "t", "d").signal)
     }
+
+    @Test fun unidentifiedCheatModuleSetInCodeIsCheatDetected() {
+        val f = ScanFinding(
+            "HIGH", "Archive code contains a set of cheat modules (criticals, nofall, bhop)", "x",
+            CheatSignal(SignalKind.ARCHIVE_CODE, "unidentified cheat client", "mods/renamed.png", "modules in code: criticals, nofall, bhop")
+        )
+        val v = VerdictEngine.evaluate(listOf(f))
+        assertEquals(VerdictLevel.CHEAT_DETECTED, v.level)
+        assertEquals("unidentified cheat client", v.detections[0].client)
+        assertEquals("mods/renamed.png", v.detections[0].file)
+        assertEquals("HIGH", v.detections[0].confidence)
+    }
 }
