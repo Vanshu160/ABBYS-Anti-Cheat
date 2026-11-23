@@ -62,4 +62,17 @@ class TermsTest {
         assertTrue(Terms.cheatModules("fall damage and jump boost").isEmpty())
         assertTrue(Terms.cheatModules("abc").isEmpty())
     }
+
+    @Test fun moreClientsAndModuleNames() {
+        for (s in listOf("ForgeHax-1.12.jar", "Novoline.jar", "Huzuni.jar", "Mahanware", "StarHack", "esohack", "Kinodupe", "G4DMODE Client",
+            "AimBot.class", "net/x/AutoCrystal.class", "AutoAnchor", "Konas.jar", "Seppuku-1.12", "Xulu.jar", "Hanabi.jar", "Astolfo.jar", "Borion.mcpack",
+            "Nodus.jar", "Backdoored.jar", "Xdolf", "nhack2.jar", "dotgod.cc", "RiseClient.jar", "Tenacity Client", "MoonClient", "ExhibitionClient",
+            "Slinky Client", "Vestige Client")) {
+            assertNotNull("should match $s", hit(s))
+        }
+        for (s in listOf("software/amazon/awssdk/services/lambda/LambdaClient.class", "io/sentry/raven/RavenClient", "CosmosClient", "FluxClient",
+            "Rise.jar", "Moon.jar", "Drip.jar", "Pyro.jar", "Konasa.jar", "nhacker", "rise of nations.txt")) {
+            assertNull("must not match $s", hit(s))
+        }
+    }
 }

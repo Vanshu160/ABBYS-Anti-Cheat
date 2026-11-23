@@ -33,7 +33,11 @@ internal object Terms {
         "3arthh4ck" to "3arthh4ck", "nursultan" to "nursultan", "zamorozka" to "zamorozka", "melonity" to "melonity",
         "wexside" to "wexside", "troxill" to "troxill", "catlean" to "catlean", "wweclient" to "wwe client",
         "wildclient" to "wild client", "excellentclient" to "excellent client", "onixclient" to "onix client",
-        "flarial" to "flarial", "ambrosial" to "ambrosial", "liquidbounceplus" to "liquidbounce", "gamesense" to "gamesense"
+        "flarial" to "flarial", "ambrosial" to "ambrosial", "liquidbounceplus" to "liquidbounce", "gamesense" to "gamesense",
+        // More long, unusual client names and module names that only cheats have.
+        "forgehax" to "forgehax", "novoline" to "novoline", "huzuni" to "huzuni", "mahanware" to "mahanware",
+        "starhack" to "starhack", "esohack" to "esohack", "kinodupe" to "kinodupe", "g4dmode" to "g4dmode", "etikahack" to "etikahack",
+        "aimbot" to "aimbot", "autocrystal" to "autocrystal", "autoanchor" to "autoanchor"
     )
 
     /**
@@ -41,11 +45,17 @@ internal object Terms {
      * never inside a longer word, so "Horion" is caught but "horizon" is not. Ordinary English words ("Future", "Delta",
      * "Vector", "Impact", "Venus"...) are only accepted together with "client", for example SigmaClient or Delta Client.
      */
-    private val DISTINCT_WORDS = listOf("horion", "latite", "cornos", "akrien", "relake", "nightx", "nitr0", "verist")
+    private val DISTINCT_WORDS = listOf(
+        "horion", "latite", "cornos", "akrien", "relake", "nightx", "nitr0", "verist",
+        "konas", "seppuku", "xulu", "hanabi", "astolfo", "borion", "nodus", "backdoored", "xdolf", "nhack", "nhack2", "nhack3", "dotgod"
+    )
     private val ORDINARY_WORDS = listOf(
         "future", "impact", "sigma", "venus", "delta", "eternity", "expensive", "rockstar", "ares", "vector",
         "apollo", "celestial", "meteor", "inertia", "phobos", "zephyr", "solstice", "primordial", "prax", "kodiak",
-        "kion", "wolfram", "minced", "deadcode"
+        "kion", "wolfram", "minced", "deadcode",
+        // Not "lambda", "raven", "flux" or "cosmos": AWS LambdaClient, Sentry Raven and others are ordinary Java classes.
+        "pyro", "tenacity", "exhibition", "augustus", "akira", "drip", "zeroday", "vestige", "rise", "moon",
+        "azura", "entropy", "opai", "myau", "slinky", "ferox", "hypnotic"
     )
     /** phrase (letters and digits only, lower case) -> family key */
     private val PHRASES: Map<String, String> = buildMap {
